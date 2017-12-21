@@ -33,6 +33,12 @@ def egg2bam(_build_cmd, srcpath, dstpath):
     ])
     return dstpath
 
+macosx_binary_magics = (
+    b'\xFE\xED\xFA\xCE', b'\xCE\xFA\xED\xFE',
+    b'\xFE\xED\xFA\xCF', b'\xCF\xFA\xED\xFE',
+    b'\xCA\xFE\xBA\xBE', b'\xBE\xBA\xFE\xCA',
+    b'\xCA\xFE\xBA\xBF', b'\xBF\xBA\xFE\xCA')
+
 
 class build_apps(distutils.core.Command):
     description = 'build Panda3D applications'
@@ -209,10 +215,9 @@ class build_apps(distutils.core.Command):
 
             if fname in self.gui_apps or self.console_apps:
                 dst = macosdir
-            elif src.endswith('.so') or src.endswith('dylib'):
+            elif os.path.isfile(src) and open(src, 'rb').read(4) in macosx_binary_magics:
                 dst = fwdir
             else:
-                # TODO Cg still shows up in Resources when it should be in Frameworks
                 dst = resdir
             shutil.move(src, dst)
 
@@ -283,7 +288,7 @@ class build_apps(distutils.core.Command):
             target_path = os.path.join(builddir, appname)
 
             stub_name = 'deploy-stub'
-            if platform.startswith('win'):
+            if platform.startswith('win') or 'macosx' in platform:
                 if not use_console:
                     stub_name = 'deploy-stubw'
 
@@ -298,7 +303,7 @@ class build_apps(distutils.core.Command):
                 stub_path = os.path.join(os.path.dirname(dtool_path), '..', 'bin', stub_name)
                 stub_file = open(stub_path, 'rb')
 
-            freezer.generateRuntimeFromStub(target_path, stub_file, {
+            freezer.generateRuntimeFromStub(target_path, stub_file, use_console, {
                 'prc_data': None,
                 'default_prc_dir': None,
                 'prc_dir_envvars': None,
@@ -481,8 +486,8 @@ class build_apps(distutils.core.Command):
                 copy_file(src, dst)
 
         # Bundle into an .app on macOS
-        #if 'macosx' in platform:
-        #    self.bundle_macos_app(builddir)
+        if 'macosx' in platform:
+            self.bundle_macos_app(builddir)
 
     def add_dependency(self, name, target_dir, search_path, referenced_by):
         """ Searches for the given DLL on the search path.  If it exists,
@@ -699,6 +704,10 @@ class build_apps(distutils.core.Command):
 
             if cmd == 0x0c: # LC_LOAD_DYLIB
                 dylib = cmd_data[16:].decode('ascii').split('\x00', 1)[0]
+                if dylib.startswith('@loader_path/../Frameworks/'):
+                    dylib = dylib.replace('@loader_path/../Frameworks/', '')
+                if dylib.startswith('@executable_path/../Frameworks/'):
+                    dylib = dylib.replace('@executable_path/../Frameworks/', '')
                 if dylib.startswith('@loader_path/'):
                     dylib = dylib.replace('@loader_path/', '')
                 load_dylibs.append(dylib)
