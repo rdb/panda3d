@@ -82,7 +82,7 @@ PkgListSet(["PYTHON", "DIRECT",                        # Python support
   "ODE", "PHYSX", "BULLET", "PANDAPHYSICS",            # Physics
   "SPEEDTREE",                                         # SpeedTree
   "ZLIB", "PNG", "JPEG", "TIFF", "OPENEXR", "SQUISH",  # 2D Formats support
-  ] + MAYAVERSIONS + MAXVERSIONS + [ "FCOLLADA", "ASSIMP", "EGG", # 3D Formats support
+  ] + MAYAVERSIONS + MAXVERSIONS + [ "FCOLLADA", "ASSIMP", "EGG", "GLTF", # 3D Formats support
   "FREETYPE", "HARFBUZZ",                              # Text rendering
   "VRPN", "OPENSSL",                                   # Transport
   "FFTW",                                              # Algorithm helpers
@@ -4679,6 +4679,37 @@ if not RUNTIME and not PkgSkip("EGG"):
   TargetAdd('libp3egg2pg.in', opts=OPTS, input=IGATEFILES)
   TargetAdd('libp3egg2pg.in', opts=['IMOD:panda3d.egg', 'ILIB:libp3egg2pg', 'SRCDIR:panda/src/egg2pg'])
   TargetAdd('libp3egg2pg_igate.obj', input='libp3egg2pg.in', opts=["DEPENDENCYONLY"])
+
+#
+# DIRECTORY: panda/src/gltf/
+#
+
+if not RUNTIME and not PkgSkip("GLTF"):
+  OPTS=['DIR:panda/src/gltf', 'BUILDING:GLTF']
+  TargetAdd('p3gltf_composite1.obj', opts=OPTS, input='p3gltf_composite1.cxx')
+
+  TargetAdd('libp3gltf.dll', input='p3gltf_composite1.obj')
+  TargetAdd('libp3gltf.dll', input=COMMON_PANDA_LIBS)
+  TargetAdd('libp3gltf.dll', opts=OPTS)
+
+  OPTS=['DIR:panda/src/gltf', 'PYTHON']
+  IGATEFILES=GetDirectoryContents('panda/src/gltf', ["*.h", "*_composite*.cxx"])
+  TargetAdd('libp3gltf.in', opts=OPTS, input=IGATEFILES)
+  TargetAdd('libp3gltf.in', opts=['IMOD:panda3d.gltf', 'ILIB:libp3gltf', 'SRCDIR:panda/src/gltf'])
+  TargetAdd('libp3gltf_igate.obj', input='libp3gltf.in', opts=["DEPENDENCYONLY"])
+  TargetAdd('p3gltf_gltfDictionary_ext.obj', opts=OPTS, input='gltfDictionary_ext.cxx')
+
+  TargetAdd('gltf_module.obj', input='libp3gltf.in')
+  TargetAdd('gltf_module.obj', opts=OPTS)
+  TargetAdd('gltf_module.obj', opts=['IMOD:panda3d.gltf', 'ILIB:gltf', 'IMPORT:panda3d.core'])
+
+  TargetAdd('gltf.pyd', input='gltf_module.obj')
+  TargetAdd('gltf.pyd', input='libp3gltf_igate.obj')
+  TargetAdd('gltf.pyd', input='p3gltf_gltfDictionary_ext.obj')
+  TargetAdd('gltf.pyd', input='libp3gltf.dll')
+  TargetAdd('gltf.pyd', input='libp3interrogatedb.dll')
+  TargetAdd('gltf.pyd', input=COMMON_PANDA_LIBS)
+  TargetAdd('gltf.pyd', opts=['PYTHON'])
 
 #
 # DIRECTORY: panda/src/framework/
