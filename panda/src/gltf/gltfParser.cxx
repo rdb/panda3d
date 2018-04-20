@@ -210,7 +210,9 @@ parse_value(GltfArrayBase &into) {
     return false;
   }
 
-  into.clear();
+  // This should not be cleared for root arrays, since resolve_id may have
+  // already been called.
+  //into.clear();
 
   size_t i = 0;
 
