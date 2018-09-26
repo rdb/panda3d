@@ -1,0 +1,10 @@
+version: '3'
+
+services:
+  ubuntu:
+    build:
+      context: .
+      dockerfile: dockerfiles/ubuntu
+    working_dir: /source
+    volumes:
+      - "..:/source"

@@ -1,0 +1,7 @@
+steps:
+  - name: build
+    command: python makepanda/makepanda.py --everything --tests
+    plugins:
+      docker-compose#v2.5.1:
+        run: ubuntu
+        config: .buildkite/docker-compose.yml
