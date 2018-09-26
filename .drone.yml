@@ -4,7 +4,7 @@ pipeline:
     image: ubuntu:latest
     pull: true
     commands:
-      - apt-get update && apt-get install -y python-dev python-pytest
+      - apt-get update && apt-get install -y python-dev python-pytest build-essential
       - python makepanda/makepanda.py --everything --git-commit ${DRONE_COMMIT_SHA} --threads 2
       - pytest
     when:
@@ -22,6 +22,6 @@ pipeline:
     script:
       - mkdir -p /tmp/d${DRONE_BUILD_NUMBER}
       - cd /tmp/d${DRONE_BUILD_NUMBER} && git clone -b ${DRONE_COMMIT_BRANCH} ${DRONE_REPO_LINK} panda3d && cd panda3d && git reset --hard ${DRONE_COMMIT_SHA}
-      - cd /tmp/d${DRONE_BUILD_NUMBER}/panda3d && python makepanda/makepanda.py --everything --git-commit ${DRONE_COMMIT_SHA} --tests
+      - cd /tmp/d${DRONE_BUILD_NUMBER}/panda3d && python3.7 makepanda/makepanda.py --everything --git-commit ${DRONE_COMMIT_SHA} --threads 2 --tests
     when:
       event: push
