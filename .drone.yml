@@ -1,0 +1,27 @@
+pipeline:
+  build:
+    group: build
+    image: ubuntu:latest
+    pull: true
+    commands:
+      - apt-get update && apt-get install -y python-dev python-pytest
+      - python makepanda/makepanda.py --everything --git-commit ${DRONE_COMMIT_SHA} --threads 2
+      - pytest
+    when:
+      event: push
+
+  build-mac:
+    group: build
+    image: appleboy/drone-ssh
+    pull: true
+    host: build-osx.panda3d.org
+    port: 15219
+    username: buildbot
+    secrets: [ ssh_key ]
+    command_timeout: 3600
+    script:
+      - mkdir -p /tmp/d${DRONE_BUILD_NUMBER}
+      - cd /tmp/d${DRONE_BUILD_NUMBER} && git clone -b ${DRONE_COMMIT_BRANCH} ${DRONE_REPO_LINK} panda3d && cd panda3d && git reset --hard ${DRONE_COMMIT_SHA}
+      - cd /tmp/d${DRONE_BUILD_NUMBER}/panda3d && python makepanda/makepanda.py --everything --git-commit ${DRONE_COMMIT_SHA} --tests
+    when:
+      event: push
