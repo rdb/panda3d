@@ -142,6 +142,8 @@ PUBLISHED:
     ALWAYS_INLINE bool is_pressed() const;
 
   PUBLISHED:
+    operator bool() { return _state != S_unknown; }
+
     MAKE_PROPERTY(known, is_known);
     MAKE_PROPERTY(pressed, is_pressed);
 
@@ -156,6 +158,8 @@ PUBLISHED:
     constexpr AxisState() = default;
 
   PUBLISHED:
+    operator bool() { return known && value != 0.0; }
+
     Axis axis = Axis::none;
     double value = 0.0;
     bool known = false;
@@ -257,6 +261,7 @@ PUBLISHED:
   // Enable rumble force-feedback effects
   INLINE void set_vibration(double strong, double weak);
 
+public:
   INLINE void enable_pointer_events();
   INLINE void disable_pointer_events();
 
