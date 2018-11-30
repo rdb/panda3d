@@ -1611,6 +1611,8 @@ class ShowBase(DirectObject.DirectObject):
         pointerWatcherNodes = []
         for i in range(win.getNumInputDevices()):
             name = win.getInputDeviceName(i)
+            print("Making MouseAndKeyboard for {}".format(name))
+            sys.stdout.flush()
             mk = self.dataRoot.attachNewNode(MouseAndKeyboard(win, i, name))
             mw = mk.attachNewNode(MouseWatcher("watcher%s" % (i)))
 
