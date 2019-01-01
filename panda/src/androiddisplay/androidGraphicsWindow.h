@@ -75,6 +75,8 @@ private:
 
   const ARect *rect;
 
+  GraphicsWindowInputDevice *_input;
+
 public:
   static TypeHandle get_class_type() {
     return _type_handle;
