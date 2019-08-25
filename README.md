@@ -1,7 +1,7 @@
-[![Build Status](https://img.shields.io/travis/panda3d/panda3d/master?style=for-the-badge)](https://travis-ci.org/panda3d/panda3d)
-[![OpenCollective](https://img.shields.io/opencollective/backers/panda3d?style=for-the-badge)](https://opencollective.com/panda3d)
-[![OpenCollective](https://img.shields.io/opencollective/sponsors/panda3d?style=for-the-badge)](https://opencollective.com/panda3d)
-[![Panda3D](https://img.shields.io/pypi/dm/Panda3D?style=for-the-badge)](https://pypi.org/project/Panda3D)
+[![Build Status](https://img.shields.io/travis/panda3d/panda3d/master)](https://travis-ci.org/panda3d/panda3d)
+[![OpenCollective](https://img.shields.io/opencollective/backers/panda3d)](https://opencollective.com/panda3d)
+[![OpenCollective](https://img.shields.io/opencollective/sponsors/panda3d)](https://opencollective.com/panda3d)
+[![Panda3D](https://img.shields.io/pypi/dm/Panda3D)](https://pypi.org/project/Panda3D)
 
 <img src="https://avatars2.githubusercontent.com/u/590956?v=3&s=200" align="right" />
 
