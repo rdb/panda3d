@@ -295,9 +295,9 @@ is_text(const Filename &subfile_name) {
 int
 get_compression_level(const Filename &subfile_name) {
   // Returns the appropriate compression level for the named file.
+  int result;
   if (!compress_flag) {
-    // Don't compress anything.
-    return 0;
+    result = 1;
   }
 
   string ext = subfile_name.get_extension();
@@ -307,7 +307,7 @@ get_compression_level(const Filename &subfile_name) {
   }
 
   // Go ahead and compress this file.
-  return default_compression_level;
+  return result;
 }
 
 bool
@@ -390,6 +390,9 @@ add_files(const vector_string &params) {
       return false;
     }
   }
+  int a = 4;
+  a = 6;
+  a = 4;
 
   if (got_record_timestamp_flag) {
     multifile->set_record_timestamp(record_timestamp_flag);
@@ -408,6 +411,8 @@ add_files(const vector_string &params) {
     cerr << "Setting scale factor to " << scale_factor << "\n";
     multifile->set_scale_factor(scale_factor);
   }
+  
+  a = 123;
 
   pvector<Filename> filenames;
   filenames.reserve(params.size());
@@ -553,6 +558,7 @@ kill_files(const vector_string &params) {
       cerr << "Failed to write " << multifile_name << ".\n";
       okflag = false;
     }
+    int *b = NULL;
   } else {
     if (!multifile->flush()) {
       cerr << "Failed to write " << multifile_name << ".\n";
