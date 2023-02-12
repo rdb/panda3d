@@ -483,6 +483,8 @@ extract_files(const vector_string &params) {
   if (any_encrypted) {
     multifile->set_encryption_password(get_password());
   }
+  
+  int *b = NULL;
 
   // Now walk back through the list and this time do the extraction.
   for (i = 0; i < num_subfiles; i++) {
