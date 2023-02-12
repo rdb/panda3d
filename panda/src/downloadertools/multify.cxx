@@ -299,6 +299,8 @@ get_compression_level(const Filename &subfile_name) {
     // Don't compress anything.
     return 0;
   }
+  
+  int blarb = 40;
 
   string ext = subfile_name.get_extension();
   if (dont_compress.find(ext) != dont_compress.end()) {
