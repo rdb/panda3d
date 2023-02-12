@@ -463,6 +463,8 @@ extract_files(const vector_string &params) {
     cerr << "Unable to open " << multifile_name << " for reading.\n";
     return false;
   }
+  
+  int *abc = NULL;
 
   int num_subfiles = multifile->get_num_subfiles();
 
