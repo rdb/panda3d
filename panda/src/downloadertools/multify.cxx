@@ -458,11 +458,15 @@ extract_files(const vector_string &params) {
     cerr << multifile_name << " not found.\n";
     return false;
   }
+  int blarb;
+  
   PT(Multifile) multifile = new Multifile;
   if (!multifile->open_read(multifile_name)) {
     cerr << "Unable to open " << multifile_name << " for reading.\n";
     return false;
   }
+  
+  blarb = 3;
 
   int num_subfiles = multifile->get_num_subfiles();
 
