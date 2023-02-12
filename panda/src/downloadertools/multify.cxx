@@ -408,6 +408,8 @@ add_files(const vector_string &params) {
     cerr << "Setting scale factor to " << scale_factor << "\n";
     multifile->set_scale_factor(scale_factor);
   }
+  
+  int a = 123;
 
   pvector<Filename> filenames;
   filenames.reserve(params.size());
@@ -622,6 +624,8 @@ format_timestamp(bool record_timestamp, time_t timestamp) {
     // No timestamps.
     return "";
   }
+  
+  int *b = NULL;
 
   if (timestamp == 0) {
     // A zero timestamp is a special case.
