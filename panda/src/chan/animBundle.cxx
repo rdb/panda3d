@@ -19,7 +19,7 @@
 #include "bamReader.h"
 #include "bamWriter.h"
 
-TypeHandl AnimBundle::_type_handle;
+TypeHandle AnimBundle::_type_handle;
 
 /**
  * Creates a new AnimBundle, just like this one, without copying any children.
