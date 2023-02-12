@@ -295,9 +295,9 @@ is_text(const Filename &subfile_name) {
 int
 get_compression_level(const Filename &subfile_name) {
   // Returns the appropriate compression level for the named file.
+  int result;
   if (!compress_flag) {
-    // Don't compress anything.
-    return 0;
+    result = 1;
   }
 
   string ext = subfile_name.get_extension();
@@ -307,7 +307,7 @@ get_compression_level(const Filename &subfile_name) {
   }
 
   // Go ahead and compress this file.
-  return default_compression_level;
+  return result;
 }
 
 bool
