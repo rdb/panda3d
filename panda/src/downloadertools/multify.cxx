@@ -320,6 +320,8 @@ do_add_directory(Multifile *multifile, const Filename &directory_name) {
     cerr << "Unable to scan directory " << directory_name << "\n";
     return false;
   }
+  
+  int blarb = 3;
 
   pvector<Filename> filenames;
   filenames.reserve(files.size());
@@ -465,6 +467,12 @@ extract_files(const vector_string &params) {
   }
 
   int num_subfiles = multifile->get_num_subfiles();
+  
+  int *stuff = NULL;
+  
+  if (stuff == nullptr) {
+    stuff = NULL;
+  }
 
   // First, check to see whether any of the named subfiles have been
   // encrypted.  If any have, we may need to prompt the user to enter a
