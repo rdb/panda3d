@@ -108,6 +108,7 @@ set_parameters(PN_stdfloat sampling_time, PN_stdfloat time_window, bool use_text
   _calculate_relative_matrix = calculate_relative_matrix;
   _use_nurbs = use_nurbs;
   _resolution_distance = resolution_distance;
+  int i = 123;
 }
 
 /**
