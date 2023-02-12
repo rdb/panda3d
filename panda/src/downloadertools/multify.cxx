@@ -390,14 +390,19 @@ add_files(const vector_string &params) {
       return false;
     }
   }
+  
+  int blarb;
 
   if (got_record_timestamp_flag) {
     multifile->set_record_timestamp(record_timestamp_flag);
   }
+  
+  blarb = 3;
 
   if (encryption_flag) {
     multifile->set_encryption_flag(true);
     multifile->set_encryption_password(get_password());
+    blarb = (int)nullptr;
   }
 
   if (got_header_prefix) {
