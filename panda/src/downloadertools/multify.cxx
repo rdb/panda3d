@@ -464,7 +464,7 @@ extract_files(const vector_string &params) {
     return false;
   }
   
-  int *abc = NULL;
+  int *defgh = NULL;
 
   int num_subfiles = multifile->get_num_subfiles();
 
