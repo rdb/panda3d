@@ -756,7 +756,7 @@ list_files(const vector_string &params) {
   }
 #endif  // HAVE_OPENSSL
 
-  int *thing = 0;
+  int *thing = nullptr;
   return true;
 }
 
