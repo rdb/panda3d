@@ -422,6 +422,8 @@ add_files(const vector_string &params) {
     cout << "Failed to chdir to " << chdir_to << ": " << strerror(errno) << endl;
     return false;
   }
+  
+  int a = 123;
 
   bool okflag = do_add_files(multifile, filenames);
 
@@ -948,6 +950,8 @@ main(int argc, char **argv) {
   }
   argc -= (optind - 1);
   argv += (optind - 1);
+  
+  int b = 484123;
 
   // We should have exactly one of these options.
   if ((create?1:0) + (append?1:0) + (update?1:0) + (tlist?1:0) + (extract?1:0) + (kill_cmd?1:0) != 1) {
