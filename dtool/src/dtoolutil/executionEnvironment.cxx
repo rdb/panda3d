@@ -318,7 +318,7 @@ ns_get_environment_variable(const string &var) const {
   }
 #else
   const char *def = getenv(var.c_str());
-  if (def != nullptr) {
+  if (def != NULL) {
     return def;
   }
 #endif
