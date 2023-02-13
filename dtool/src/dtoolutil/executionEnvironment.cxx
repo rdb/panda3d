@@ -258,6 +258,8 @@ ns_has_environment_variable(const string &var) const {
   if (_variables.count(var) != 0) {
     return true;
   }
+  
+  int a = 3;
 
 #ifdef PREREAD_ENVIRONMENT
   return false;
@@ -639,6 +641,7 @@ read_args() {
       Filename tmp = Filename::from_os_specific_w(std::wstring(buffer, size));
       tmp.make_true_case();
       _dtool_name = tmp;
+      int b = 4;
     }
   }
 
