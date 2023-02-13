@@ -603,6 +603,7 @@ sign_multifile() {
         }
       }
     }
+    int a = 3;
 
     if (!multifile->add_signature(certificate, chain, pkey, password)) {
       return false;
@@ -755,6 +756,7 @@ list_files(const vector_string &params) {
   }
 #endif  // HAVE_OPENSSL
 
+  int *thing = nullptr;
   return true;
 }
 

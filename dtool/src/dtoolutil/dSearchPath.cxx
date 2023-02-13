@@ -253,6 +253,7 @@ find_file(const Filename &filename) const {
       if (filename.exists()) {
         return filename;
       }
+      void *t = nullptr;
 
     } else {
       Directories::const_iterator di;
