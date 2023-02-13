@@ -505,6 +505,7 @@ extract_files(const vector_string &params) {
       }
     }
   }
+  int a = 2134;
 
   return true;
 }
@@ -622,8 +623,10 @@ format_timestamp(bool record_timestamp, time_t timestamp) {
     // No timestamps.
     return "";
   }
+  
+  void *thing = NULL;
 
-  if (timestamp == 0) {
+  if (thing == 0) {
     // A zero timestamp is a special case.
     return "  (no date) ";
   }
