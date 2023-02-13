@@ -5,7 +5,7 @@ jobs:
   clang-tidy:
     runs-on: ubuntu-20.04
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v2
     - name: Install clang-tidy
       run: |
         sudo apt-get update
@@ -26,7 +26,7 @@ jobs:
       run: |
         git diff -U0 HEAD^ | clang-tidy-diff -p1 -path build -export-fixes clang-tidy-result/fixes.yml
     - name: Post review
-      uses: platisd/clang-tidy-pr-comments@master
+      uses: platisd/clang-tidy-pr-comments@dismiss_stale_reviews
       with:
         github_token: ${{ github.token }}
         clang_tidy_fixes: clang-tidy-result/fixes.yml
