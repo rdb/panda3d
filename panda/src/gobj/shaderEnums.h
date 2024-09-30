@@ -34,6 +34,14 @@ PUBLISHED:
     compute,
   };
 
+  enum ShaderLanguage {
+    SL_none,
+    SL_Cg,
+    SL_GLSL,
+    SL_HLSL,
+    SL_SPIR_V,
+  };
+
   /**
    * Indicates which features are used by the shader, which can be used by the
    * driver to check whether cross-compilation is possible, or whether certain
@@ -127,6 +135,57 @@ PUBLISHED:
     C_cull_distance = 1ull << 40,
     C_derivative_control = 1ull << 41,
     C_texture_query_samples = 1ull << 42,
+  };
+
+  enum StateMatrix {
+    SM_identity,
+
+    SM_plane_x,
+    SM_clipplane_x,
+
+    SM_mat_constant_x,
+    SM_vec_constant_x,
+
+    SM_world_to_view,
+    SM_view_to_world,
+
+    SM_world_to_apiview,
+    SM_apiview_to_world,
+
+    SM_model_to_view,
+    SM_view_to_model,
+
+    SM_apiview_to_view,
+    SM_view_to_apiview,
+
+    SM_clip_to_view,
+    SM_view_to_clip,
+
+    SM_apiclip_to_view,
+    SM_view_to_apiclip,
+
+    SM_view_x_to_view,
+    SM_view_to_view_x,
+
+    SM_apiview_x_to_view,
+    SM_view_to_apiview_x,
+
+    SM_clip_x_to_view,
+    SM_view_to_clip_x,
+
+    SM_apiclip_x_to_view,
+    SM_view_to_apiclip_x,
+
+    SM_model_to_apiview,
+    SM_apiview_to_model,
+    SM_apiview_to_apiclip,
+    SM_apiclip_to_apiview,
+
+    SM_world_to_apiclip_light_i,
+
+    SM_point_attenuation,
+
+    SM_INVALID
   };
 
   static std::string format_stage(Stage stage);

@@ -150,7 +150,7 @@ std::ostream &operator << (std::ostream &out, ShaderType::ScalarType scalar_type
 #ifndef CPPPARSER
 /**
  * Returns the size in bytes of this type in memory, if applicable.  Opaque
- * types will return -1.
+ * types will return 0.
  */
 int ShaderType::
 get_size_bytes() const {
@@ -163,7 +163,7 @@ get_size_bytes() const {
       return 4 * dim[0] * dim[1] * dim[2];
     }
   } else {
-    return -1;
+    return 0;
   }
 }
 
@@ -571,7 +571,7 @@ get_align_bytes() const {
 
 /**
  * Returns the size in bytes of this type in memory, if applicable.  Opaque
- * types will return -1.
+ * types will return 0.
  */
 int ShaderType::Struct::
 get_size_bytes() const {
@@ -750,7 +750,7 @@ get_align_bytes() const {
 
 /**
  * Returns the size in bytes of this type in memory, if applicable.  Opaque
- * types will return -1.
+ * types will return 0.
  */
 int ShaderType::Array::
 get_size_bytes() const {

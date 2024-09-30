@@ -169,7 +169,7 @@ ShaderModuleSpirV(Stage stage, std::vector<uint32_t> words, BamCacheRecord *reco
       var.type = def._type;
       var.name = InternalName::make(def._name);
       var._location = def._location;
-      //var._id = id;
+      var.id = id;
 
       if (def._storage_class == spv::StorageClassInput) {
         _inputs.push_back(std::move(var));
@@ -710,6 +710,7 @@ write_datagram(BamWriter *manager, Datagram &dg) {
   for (const Variable &input : _inputs) {
     manager->write_pointer(dg, input.type);
     manager->write_pointer(dg, input.name);
+    dg.add_uint32(input.id);
     dg.add_int32(input._location);
   }
 
@@ -717,6 +718,7 @@ write_datagram(BamWriter *manager, Datagram &dg) {
   for (const Variable &output : _outputs) {
     manager->write_pointer(dg, output.type);
     manager->write_pointer(dg, output.name);
+    dg.add_uint32(output.id);
     dg.add_int32(output._location);
   }
 
@@ -724,6 +726,7 @@ write_datagram(BamWriter *manager, Datagram &dg) {
   for (const Variable &parameter : _parameters) {
     manager->write_pointer(dg, parameter.type);
     manager->write_pointer(dg, parameter.name);
+    dg.add_uint32(parameter.id);
     dg.add_int32(parameter._location);
   }
 
@@ -805,6 +808,7 @@ fillin(DatagramIterator &scan, BamReader *manager) {
   for (uint32_t i = 0; i < num_inputs; ++i) {
     manager->read_pointer(scan); // type
     manager->read_pointer(scan); // name
+    _inputs[i].id = scan.get_uint32();
     _inputs[i]._location = scan.get_int32();
   }
 
@@ -813,6 +817,7 @@ fillin(DatagramIterator &scan, BamReader *manager) {
   for (uint32_t i = 0; i < num_outputs; ++i) {
     manager->read_pointer(scan); // type
     manager->read_pointer(scan); // name
+    _outputs[i].id = scan.get_uint32();
     _outputs[i]._location = scan.get_int32();
   }
 
@@ -821,6 +826,7 @@ fillin(DatagramIterator &scan, BamReader *manager) {
   for (uint32_t i = 0; i < num_parameters; ++i) {
     manager->read_pointer(scan); // type
     manager->read_pointer(scan); // name
+    _parameters[i].id = scan.get_uint32();
     _parameters[i]._location = scan.get_int32();
   }
 
@@ -980,9 +986,9 @@ assign_locations(Stage stage) {
       else if (def._storage_class == spv::StorageClassOutput) {
         output_locations.set_range(def._location, def._type ? def._type->get_num_interface_locations() : 1);
       }
-      else if (def._storage_class == spv::StorageClassUniformConstant) {
+      /*else if (def._storage_class == spv::StorageClassUniformConstant) {
         uniform_locations.set_range(def._location, def._type ? def._type->get_num_parameter_locations() : 1);
-      }
+      }*/
     }
   }
 
@@ -1029,7 +1035,7 @@ assign_locations(Stage stage) {
 
         sc_str = "output";
       }
-      else if (def._storage_class == spv::StorageClassUniformConstant) {
+      /*else if (def._storage_class == spv::StorageClassUniformConstant) {
         num_locations = def._type->get_num_parameter_locations();
         if (num_locations == 0) {
           continue;
@@ -1039,7 +1045,7 @@ assign_locations(Stage stage) {
         uniform_locations.set_range(location, num_locations);
 
         sc_str = "uniform";
-      }
+      }*/
       else {
         continue;
       }
@@ -1060,6 +1066,52 @@ assign_locations(Stage stage) {
       def._location = location;
       it = _instructions.insert(it,
         spv::OpDecorate, {id, spv::DecorationLocation, (uint32_t)location});
+      ++it;
+    }
+  }
+}
+
+/**
+ * Assigns location decorations based on the given remapping.
+ */
+void ShaderModuleSpirV::InstructionWriter::
+assign_locations(const pmap<const InternalName *, int> &remap) {
+  pmap<uint32_t, int> remap_by_id;
+  for (uint32_t id = 0; id < _defs.size(); ++id) {
+    Definition &def = _defs[id];
+    if (def._dtype == DT_variable) {
+      auto it = remap.find(InternalName::make(def._name));
+      if (it != remap.end()) {
+        remap_by_id[id] = it->second;
+        def._location = it->second;
+      }
+    }
+  }
+
+  // Replace existing locations.
+  InstructionIterator it = _instructions.begin_annotations();
+  while (it != _instructions.end_annotations()) {
+    Instruction op = *it;
+
+    if (op.opcode == spv::OpDecorate &&
+        (spv::Decoration)op.args[1] == spv::DecorationLocation && op.nargs >= 3) {
+      auto it = remap_by_id.find(op.args[0]);
+      if (it != remap_by_id.end()) {
+        op.args[2] = it->second;
+        remap_by_id.erase(it);
+      }
+    }
+
+    ++it;
+  }
+
+  // Insert decorations for every unassigned variable at the beginning of the
+  // annotations block.
+  if (!remap_by_id.empty()) {
+    it = _instructions.begin_annotations();
+    for (auto rit = remap_by_id.begin(); rit != remap_by_id.end(); ++rit) {
+      it = _instructions.insert(it,
+        spv::OpDecorate, {rit->first, spv::DecorationLocation, (uint32_t)rit->second});
       ++it;
     }
   }

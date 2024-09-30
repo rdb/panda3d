@@ -227,6 +227,7 @@ public:
   (Texture *tex, int view, int z, const DisplayRegion *dr, const RenderBuffer &rb,
    ScreenshotRequest *request = nullptr)=0;
 
+  INLINE CoordinateSystem get_coordinate_system() const { return _coordinate_system; }
   virtual CoordinateSystem get_internal_coordinate_system() const=0;
 
   virtual void bind_light(PointLight *light_obj, const NodePath &light,
@@ -235,6 +236,9 @@ public:
                           int light_id) { }
   virtual void bind_light(Spotlight *light_obj, const NodePath &light,
                           int light_id) { }
+
+  virtual Texture *get_shadow_map(const NodePath &light_np, GraphicsOutputBase *host=nullptr)=0;
+  virtual Texture *get_dummy_shadow_map(bool cube_map) const=0;
 
   virtual void ensure_generated_shader(const RenderState *state)=0;
 
@@ -272,6 +276,8 @@ private:
 
 protected:
   static UpdateSeq _generated_shader_seq;
+
+  CoordinateSystem _coordinate_system = CS_invalid;
 
 public:
   static TypeHandle get_class_type() {

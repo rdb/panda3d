@@ -278,6 +278,13 @@ compile_now(ShaderModule::Stage stage, std::istream &in,
     case ShaderModule::Stage::fragment:
       source_entry_point = "fshader";
       break;
+    case ShaderModule::Stage::compute:
+      // This really isn't supported by Cg, but we have a special exception
+      // for the unit test suite here if it detects this special string.
+      if (strstr(string, "//Cg profile hlslc\n") != nullptr) {
+        source_entry_point = "cshader";
+        break;
+      }
     default:
       shader_cat.error()
         << "Cg does not support " << stage << " shaders.\n";

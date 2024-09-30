@@ -217,6 +217,7 @@ public:
     Definition &modify_definition(uint32_t id);
 
     void assign_locations(Stage stage);
+    void assign_locations(const pmap<const InternalName *, int> &locations);
     void bind_descriptor_set(uint32_t set, const vector_int &locations);
     void remove_unused_variables();
 

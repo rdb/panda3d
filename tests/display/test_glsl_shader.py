@@ -678,30 +678,34 @@ def test_glsl_struct(gsg):
         float b;
         sampler2D c;
         float unused;
-        vec2 d;
-        sampler2D e;
+        vec3 d[2];
+        vec2 e;
+        sampler2D f;
     } test;
     """
     code = """
     assert(test.a == vec3(1, 2, 3));
     assert(test.b == 4);
     assert(texture(test.c, vec2(0, 0)).r == 5);
-    assert(test.d == vec2(6, 7));
-    assert(texture(test.e, vec2(0, 0)).r == 8);
+    assert(test.d[0] == vec3(6, 7, 8));
+    assert(test.d[1] == vec3(9, 10, 11));
+    assert(test.e == vec2(12, 13));
+    assert(texture(test.f, vec2(0, 0)).r == 14);
     """
-    tex_c = core.Texture()
+    tex_c = core.Texture('c')
     tex_c.setup_2d_texture(1, 1, core.Texture.T_float, core.Texture.F_r32)
     tex_c.set_clear_color((5, 0, 0, 0))
-    tex_d = core.Texture()
-    tex_d.setup_2d_texture(1, 1, core.Texture.T_float, core.Texture.F_r32)
-    tex_d.set_clear_color((8, 0, 0, 0))
+    tex_f = core.Texture('f')
+    tex_f.setup_2d_texture(1, 1, core.Texture.T_float, core.Texture.F_r32)
+    tex_f.set_clear_color((14, 0, 0, 0))
     run_glsl_test(gsg, code, preamble, {
         'test.unused': 0,
         'test.a': (1, 2, 3),
         'test.b': 4,
         'test.c': tex_c,
-        'test.d': (6, 7),
-        'test.e': tex_d,
+        'test.d': [(6, 7, 8), (9, 10, 11)],
+        'test.e': [12, 13],
+        'test.f': tex_f,
     })
 
 
@@ -787,16 +791,25 @@ def test_glsl_struct_pseudo_light(gsg):
     struct FakeLightParameters {
       vec4 specular;
       vec4 position;
+      vec3 attenuation;
+      float constantAttenuation;
+      float radius;
     };
     uniform FakeLightParameters test;
     """
     code = """
     assert(test.specular == vec4(1, 2, 3, 4));
     assert(test.position == vec4(5, 6, 7, 8));
+    assert(test.attenuation == vec3(9, 10, 11));
+    assert(test.constantAttenuation == 12);
+    assert(test.radius == 13);
     """
     run_glsl_test(gsg, code, preamble, {
         'test.specular': (1, 2, 3, 4),
         'test.position': (5, 6, 7, 8),
+        'test.attenuation': (9, 10, 11),
+        'test.constantAttenuation': 12,
+        'test.radius': 13,
     })
 
 
@@ -1136,6 +1149,106 @@ def test_glsl_state_fog(gsg):
     node.set_fog(fog)
 
     run_glsl_test(gsg, code, preamble, state=node.get_state())
+
+
+def test_glsl_state_texture(gsg):
+    def gen_texture(v):
+        tex = core.Texture(f"tex{v}")
+        tex.setup_2d_texture(1, 1, core.Texture.T_unsigned_byte, core.Texture.F_red)
+        tex.set_clear_color((v / 255.0, 0, 0, 0))
+        return tex
+
+    np = core.NodePath("test")
+
+    ts1 = core.TextureStage("ts1")
+    ts1.sort = 10
+    ts1.mode = core.TextureStage.M_modulate
+    np.set_texture(ts1, gen_texture(1))
+
+    ts2 = core.TextureStage("ts2")
+    ts2.sort = 20
+    ts2.mode = core.TextureStage.M_add
+    np.set_texture(ts2, gen_texture(2))
+
+    ts3 = core.TextureStage("ts3")
+    ts3.sort = 30
+    ts3.mode = core.TextureStage.M_modulate
+    np.set_texture(ts3, gen_texture(3))
+
+    ts4 = core.TextureStage("ts4")
+    ts4.sort = 40
+    ts4.mode = core.TextureStage.M_normal_height
+    np.set_texture(ts4, gen_texture(4))
+
+    ts5 = core.TextureStage("ts5")
+    ts5.sort = 50
+    ts5.mode = core.TextureStage.M_add
+    np.set_texture(ts5, gen_texture(5))
+
+    ts6 = core.TextureStage("ts6")
+    ts6.sort = 60
+    ts6.mode = core.TextureStage.M_normal
+    np.set_texture(ts6, gen_texture(6))
+
+    # Do this in multiple passes to stay under sampler limit of 16
+    preamble = """
+    uniform sampler2D p3d_Texture2;
+    uniform sampler2D p3d_Texture0;
+    uniform sampler2D p3d_Texture1;
+    uniform sampler2D p3d_Texture3;
+    uniform sampler2D p3d_Texture4;
+    uniform sampler2D p3d_Texture5;
+    uniform sampler2D p3d_Texture6;
+    uniform sampler2D p3d_Texture[7];
+    """
+    code = """
+    vec2 coord = vec2(0, 0);
+    assert(abs(texture(p3d_Texture2, coord).r - 3.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture0, coord).r - 1.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture1, coord).r - 2.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture3, coord).r - 4.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture4, coord).r - 5.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture5, coord).r - 6.0 / 255.0) < 0.001);
+    assert(texture(p3d_Texture6, coord).r == 1.0);
+    assert(abs(texture(p3d_Texture[0], coord).r - 1.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture[2], coord).r - 3.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture[3], coord).r - 4.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture[1], coord).r - 2.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture[4], coord).r - 5.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_Texture[5], coord).r - 6.0 / 255.0) < 0.001);
+    assert(texture(p3d_Texture[6], coord).r == 1.0);
+    """
+
+    run_glsl_test(gsg, code, preamble, state=np.get_state())
+
+    preamble = """
+    uniform sampler2D p3d_TextureFF[5];
+    uniform sampler2D p3d_TextureModulate[3];
+    uniform sampler2D p3d_TextureAdd[3];
+    uniform sampler2D p3d_TextureNormal[3];
+    uniform sampler2D p3d_TextureHeight[2];
+    """
+    code = """
+    vec2 coord = vec2(0, 0);
+    assert(abs(texture(p3d_TextureFF[0], coord).r - 1.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_TextureFF[1], coord).r - 2.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_TextureFF[2], coord).r - 3.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_TextureFF[3], coord).r - 5.0 / 255.0) < 0.001);
+    assert(texture(p3d_TextureFF[4], coord).r == 1.0);
+    assert(abs(texture(p3d_TextureModulate[0], coord).r - 1.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_TextureModulate[1], coord).r - 3.0 / 255.0) < 0.001);
+    assert(texture(p3d_TextureModulate[2], coord).r == 1.0);
+    assert(abs(texture(p3d_TextureAdd[0], coord).r - 2.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_TextureAdd[1], coord).r - 5.0 / 255.0) < 0.001);
+    assert(texture(p3d_TextureAdd[2], coord) == vec4(0.0, 0.0, 0.0, 1.0));
+    assert(abs(texture(p3d_TextureNormal[0], coord).r - 4.0 / 255.0) < 0.001);
+    assert(abs(texture(p3d_TextureNormal[1], coord).r - 6.0 / 255.0) < 0.001);
+    assert(texture(p3d_TextureNormal[2], coord) == vec4(127 / 255.0, 127 / 255.0, 1.0, 0.0));
+    assert(texture(p3d_TextureHeight[0], coord).r == 4.0 / 255.0);
+    assert(texture(p3d_TextureHeight[1], coord) == vec4(127 / 255.0, 127 / 255.0, 1.0, 0.0));
+    """
+
+    run_glsl_test(gsg, code, preamble, state=np.get_state())
 
 
 def test_glsl_frame_number(gsg):

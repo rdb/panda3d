@@ -12,32 +12,13 @@
  */
 
 /**
- * Returns the uniform location for the given seqno id, or -1 if the uniform is
- * not used.
- */
-INLINE GLint CLP(ShaderContext)::
-get_uniform_location(int seqno) const {
-  nassertr(seqno >= 0, -1);
-
-  if (_remap_uniform_locations) {
-    if ((size_t)seqno < _uniform_location_map.size()) {
-      return _uniform_location_map[(size_t)seqno];
-    } else {
-      return -1;
-    }
-  } else {
-    return (GLint)seqno;
-  }
-}
-
-/**
- * Sets the uniform location for the given seqno id.
+ *
  */
 INLINE void CLP(ShaderContext)::
-set_uniform_location(int seqno, GLint location) {
-  while (seqno >= _uniform_location_map.size()) {
-    _uniform_location_map.push_back(-1);
+set_display_region(const DisplayRegion *display_region) {
+  if (_tracker._display_region != display_region) {
+    _tracker._display_region = display_region;
+    _tracker._pixel_size = display_region->get_pixel_size();
+    issue_parameters(ShaderStateTracker::D_scene);
   }
-
-  _uniform_location_map[seqno] = location;
 }

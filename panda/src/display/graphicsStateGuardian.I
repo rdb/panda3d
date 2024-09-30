@@ -803,16 +803,6 @@ get_runtime_color_scale() const {
 }
 
 /**
- * Returns the coordinate system in effect on this particular gsg.  Normally,
- * this will be the default coordinate system, but it might be set differently
- * at runtime.
- */
-INLINE CoordinateSystem GraphicsStateGuardian::
-get_coordinate_system() const {
-  return _coordinate_system;
-}
-
-/**
  * Specifies the global quality_level to be imposed for all Textures rendered
  * by this GSG.  This overrides the value set on individual textures via
  * Texture::set_quality_level().  Set this to Texture::QL_default in order to
