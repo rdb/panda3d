@@ -29,9 +29,9 @@ const char * const WinStatsFlameGraph::_window_class_name = "flame";
  */
 WinStatsFlameGraph::
 WinStatsFlameGraph(WinStatsMonitor *monitor, int thread_index,
-                   int collector_index) :
+                   int collector_index, int frame_number) :
   PStatFlameGraph(monitor,
-                  thread_index, collector_index,
+                  thread_index, collector_index, frame_number,
                   monitor->get_pixel_scale() * default_flame_graph_width / 4,
                   monitor->get_pixel_scale() * default_flame_graph_height / 4),
   WinStatsGraph(monitor)
