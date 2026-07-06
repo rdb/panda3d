@@ -119,7 +119,7 @@ compile_module(const ShaderModule *module, DWORD *&data) {
   // need to modify the SPIR-V to hoist those out.
   // We tell it not to remove the empty structs, since that changes the member
   // numbering, which we need to match between the original and the HLSL.
-  static const uint64_t emulate_caps = (Shader::C_texture_query_size | Shader::C_image_query_size | Shader::C_texture_query_levels);
+  static const uint64_t emulate_caps = (Shader::C_sampler_cube_shadow | Shader::C_texture_query_size | Shader::C_image_query_size | Shader::C_texture_query_levels);
   if (hoist_necessary || (spv->_emulatable_caps & emulate_caps) != 0) {
     SpirVTransformer transformer(stream);
 

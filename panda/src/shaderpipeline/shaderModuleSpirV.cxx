@@ -220,7 +220,8 @@ ShaderModuleSpirV(Stage stage, std::vector<uint32_t> words, const CompilerOption
           // Image variable sampled with depth ref.  Make sure this is actually
           // a shadow sampler; this isn't always done by the compiler, and the
           // spec isn't clear that this is necessary, but it helps spirv-cross
-          // properly generate shadow samplers.
+          // properly generate shadow samplers and helps us distinguish between
+          // shadow samplers and regular ones.
           if (def.is_dref_sampled() && !sampled_image_type->is_shadow()) {
             // No, change the type of this variable.
             var.type = ShaderType::register_type(ShaderType::SampledImage(

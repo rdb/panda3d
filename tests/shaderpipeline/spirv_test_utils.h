@@ -15,45 +15,57 @@
 #define SPIRV_TEST_UTILS_H
 
 #include "spirVTransformer.h"
+#include "spirVBuilder.h"
 #include "shaderType.h"
-
-#include <cstring>
 
 using Instruction = ShaderModuleSpirV::Instruction;
 using InstructionStream = ShaderModuleSpirV::InstructionStream;
 
 /**
- * Assembles a SPIR-V module word-by-word, prepending the module header.
+ * Creates an empty module with the standard capability and memory model.
  */
-class ModuleBuilder {
-public:
-  void op(spv::Op opcode, std::initializer_list<uint32_t> args) {
-    _words.push_back(((uint32_t)args.size() + 1u) << spv::WordCountShift | (uint32_t)opcode);
-    _words.insert(_words.end(), args.begin(), args.end());
-  }
+inline SpirVModule
+make_module() {
+  SpirVModule module;
+  module.add_capability(spv::CapabilityShader);
+  module.set_memory_model(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+  return module;
+}
 
-  // Same, but packs a string literal after the given args (as used by OpName,
-  // OpEntryPoint, etc.), optionally followed by further arguments.
-  void op(spv::Op opcode, std::initializer_list<uint32_t> args, const char *str,
-           std::initializer_list<uint32_t> more = {}) {
-    size_t str_words = std::strlen(str) / 4 + 1;
-    _words.push_back((uint32_t)(args.size() + str_words + more.size() + 1u) << spv::WordCountShift | (uint32_t)opcode);
-    _words.insert(_words.end(), args.begin(), args.end());
-    size_t offset = _words.size();
-    _words.resize(offset + str_words, 0u);
-    std::memcpy(&_words[offset], str, std::strlen(str));
-    _words.insert(_words.end(), more.begin(), more.end());
+/**
+ * Adds an empty main function (just a label and a return) with an entry
+ * point for the given execution model, and returns the function id.  The
+ * given variables are added to the entry point interface.
+ */
+inline uint32_t
+add_main(SpirVModule &module, spv::ExecutionModel model = spv::ExecutionModelFragment,
+         pvector<uint32_t> interface_vars = {}, const char *name = "main") {
+  SpirVBuilder builder(module);
+  uint32_t function_id = builder.op_function(nullptr);
+  builder.op_label();
+  builder.op_return();
+  builder.op_function_end();
+  module.add_entry_point(model, function_id, name, std::move(interface_vars));
+  if (model == spv::ExecutionModelFragment) {
+    module.add_execution_mode(function_id, spv::ExecutionModeOriginUpperLeft);
   }
+  return function_id;
+}
 
-  InstructionStream build(uint32_t id_bound) const {
-    std::vector<uint32_t> words({spv::MagicNumber, 0x10000u, 0u, id_bound, 0u});
-    words.insert(words.end(), _words.begin(), _words.end());
-    return InstructionStream(std::move(words));
+/**
+ * Returns a builder whose cursor is positioned just before the final
+ * OpReturn of the given function, for adding code to a main function made
+ * with add_main.
+ */
+inline SpirVBuilder
+builder_before_return(SpirVModule &module, uint32_t function_id) {
+  SpirVModule::Function *function = module.get_function(function_id);
+  size_t index = function->instructions.size();
+  while (index > 0 && function->instructions[index - 1].opcode != spv::OpReturn) {
+    --index;
   }
-
-private:
-  std::vector<uint32_t> _words;
-};
+  return SpirVBuilder(module, function_id, index > 0 ? index - 1 : 0);
+}
 
 /**
  * Counts the instructions with the given opcode.
@@ -67,6 +79,21 @@ count_op(InstructionStream &stream, spv::Op opcode) {
     }
   }
   return count;
+}
+
+/**
+ * Returns the index'th instruction with the given opcode.  The returned
+ * Instruction points into the stream, which must outlive it.  Returns an
+ * OpNop instruction if there was no match.
+ */
+inline Instruction
+find_op(InstructionStream &stream, spv::Op opcode, int index = 0) {
+  for (Instruction op : stream) {
+    if (op.opcode == opcode && index-- == 0) {
+      return op;
+    }
+  }
+  return Instruction {spv::OpNop, 0, nullptr};
 }
 
 /**

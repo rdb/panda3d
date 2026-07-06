@@ -173,3 +173,21 @@ INLINE bool SpirVResultDatabase::
 has_definition(uint32_t id) const {
   return id < _defs.size() && _defs[id]._dtype != DT_none;
 }
+
+/**
+ * Returns true if the given id is a type and the canonical definition of that
+ * type, ie. the same as what define_type(...) would have produced for it.
+ */
+INLINE bool SpirVResultDatabase::
+is_canonical_type(uint32_t id) const {
+  if (id < _defs.size() && _defs[id]._type != nullptr) {
+    TypeMap::const_iterator tit = _type_map.find(_defs[id]._type);
+    if (tit != _type_map.end()) {
+      return tit->second == id;
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+}

@@ -28,8 +28,7 @@ public:
   SpirVReplaceVariableTypePass(uint32_t variable_id, const ShaderType *type,
                                spv::StorageClass storage_class);
 
-  virtual bool transform_definition_op(Instruction op);
-  virtual bool transform_function_op(Instruction op);
+  virtual void run(SpirVModule &module) override;
 
 private:
   const uint32_t _variable_id;

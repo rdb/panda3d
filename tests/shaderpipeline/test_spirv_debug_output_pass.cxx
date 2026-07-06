@@ -17,32 +17,22 @@
 #include "catch_amalgamated.hpp"
 
 TEST_CASE("SpirVDebugOutputPass converts prints to buffer writes", "[shaderpipeline]") {
-  enum : uint32_t {
-    id_import = 1, id_main, id_void, id_fnvoid, id_float, id_const_one,
-    id_string, id_label, id_result,
-    id_bound,
-  };
-
   // A fragment shader containing just: debugPrintfEXT("value: %f", 1.0);
-  ModuleBuilder b;
-  b.op(spv::OpCapability, {spv::CapabilityShader});
-  b.op(spv::OpExtension, {}, "SPV_KHR_non_semantic_info");
-  b.op(spv::OpExtInstImport, {id_import}, "NonSemantic.DebugPrintf");
-  b.op(spv::OpMemoryModel, {spv::AddressingModelLogical, spv::MemoryModelGLSL450});
-  b.op(spv::OpEntryPoint, {spv::ExecutionModelFragment, id_main}, "main");
-  b.op(spv::OpExecutionMode, {id_main, spv::ExecutionModeOriginUpperLeft});
-  b.op(spv::OpString, {id_string}, "value: %f");
-  b.op(spv::OpTypeVoid, {id_void});
-  b.op(spv::OpTypeFunction, {id_fnvoid, id_void});
-  b.op(spv::OpTypeFloat, {id_float, 32});
-  b.op(spv::OpConstant, {id_float, id_const_one, 0x3f800000u});
-  b.op(spv::OpFunction, {id_void, id_main, spv::FunctionControlMaskNone, id_fnvoid});
-  b.op(spv::OpLabel, {id_label});
-  b.op(spv::OpExtInst, {id_void, id_result, id_import, 1 /*DebugPrintf*/, id_string, id_const_one});
-  b.op(spv::OpReturn, {});
-  b.op(spv::OpFunctionEnd, {});
+  SpirVModule module = make_module();
+  uint32_t id_import = module.add_ext_inst_import("NonSemantic.DebugPrintf");
+  uint32_t id_string = module.add_string("value: %f");
+  uint32_t id_void = module.define_type(nullptr);
+  uint32_t id_const_one = module.define_float_constant(1.0f);
 
-  InstructionStream stream = b.build(id_bound);
+  uint32_t main_id = add_main(module);
+  {
+    SpirVBuilder b = builder_before_return(module, main_id);
+    b.insert(spv::OpExtInst, {id_void, b.allocate_id(), id_import,
+                              1 /*DebugPrintf*/, id_string, id_const_one});
+  }
+
+  module.add_extension("SPV_KHR_non_semantic_info");
+  InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
 
   Shader::DebugInfo debug_info;
@@ -73,32 +63,23 @@ TEST_CASE("SpirVDebugOutputPass converts prints to buffer writes", "[shaderpipel
 }
 
 TEST_CASE("SpirVDebugOutputPass converts asserts to buffer writes", "[shaderpipeline]") {
-  enum : uint32_t {
-    id_import = 1, id_main, id_void, id_fnvoid,
-    id_string_fmt, id_string_expr, id_label, id_result,
-    id_bound,
-  };
-
   // A fragment shader containing just: assert(1 < 2), which is encoded as a
   // print with the special format string "%!".
-  ModuleBuilder b;
-  b.op(spv::OpCapability, {spv::CapabilityShader});
-  b.op(spv::OpExtension, {}, "SPV_KHR_non_semantic_info");
-  b.op(spv::OpExtInstImport, {id_import}, "NonSemantic.DebugPrintf");
-  b.op(spv::OpMemoryModel, {spv::AddressingModelLogical, spv::MemoryModelGLSL450});
-  b.op(spv::OpEntryPoint, {spv::ExecutionModelFragment, id_main}, "main");
-  b.op(spv::OpExecutionMode, {id_main, spv::ExecutionModeOriginUpperLeft});
-  b.op(spv::OpString, {id_string_fmt}, "%!");
-  b.op(spv::OpString, {id_string_expr}, "1 < 2");
-  b.op(spv::OpTypeVoid, {id_void});
-  b.op(spv::OpTypeFunction, {id_fnvoid, id_void});
-  b.op(spv::OpFunction, {id_void, id_main, spv::FunctionControlMaskNone, id_fnvoid});
-  b.op(spv::OpLabel, {id_label});
-  b.op(spv::OpExtInst, {id_void, id_result, id_import, 1 /*DebugPrintf*/, id_string_fmt, id_string_expr});
-  b.op(spv::OpReturn, {});
-  b.op(spv::OpFunctionEnd, {});
+  SpirVModule module = make_module();
+  uint32_t id_import = module.add_ext_inst_import("NonSemantic.DebugPrintf");
+  uint32_t id_string_fmt = module.add_string("%!");
+  uint32_t id_string_expr = module.add_string("1 < 2");
+  uint32_t id_void = module.define_type(nullptr);
 
-  InstructionStream stream = b.build(id_bound);
+  uint32_t main_id = add_main(module);
+  {
+    SpirVBuilder b = builder_before_return(module, main_id);
+    b.insert(spv::OpExtInst, {id_void, b.allocate_id(), id_import,
+                              1 /*DebugPrintf*/, id_string_fmt, id_string_expr});
+  }
+
+  module.add_extension("SPV_KHR_non_semantic_info");
+  InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
 
   Shader::DebugInfo debug_info;
@@ -112,6 +93,7 @@ TEST_CASE("SpirVDebugOutputPass converts asserts to buffer writes", "[shaderpipe
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
   CHECK(count_op(result, spv::OpExtInst) == 0);
+  CHECK(count_op(result, spv::OpExtInstImport) == 0);
 
 #ifndef NDEBUG
   // The assertion was registered...

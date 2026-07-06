@@ -15,138 +15,45 @@
 #include "spirVTransformPass.h"
 
 /**
- * Constructs an instruction writer to operate on the given instruction stream.
+ * Materializes the given instruction stream.
  */
 SpirVTransformer::
-SpirVTransformer(const InstructionStream &stream) {
-  _db.modify_definition(stream.get_id_bound() - 1);
-
-  uint32_t current_function_id = 0;
-
-  InstructionIterator begin = ((InstructionStream &)stream).begin();
-  InstructionIterator end = ((InstructionStream &)stream).end();
-  InstructionIterator it = begin;
-  while (it != end) {
-    Instruction op = *it;
-    if (op.opcode != spv::OpNop &&
-        op.opcode != spv::OpCapability &&
-        op.opcode != spv::OpExtension &&
-        op.opcode != spv::OpExtInstImport &&
-        op.opcode != spv::OpMemoryModel &&
-        op.opcode != spv::OpEntryPoint &&
-        op.opcode != spv::OpExecutionMode &&
-        op.opcode != spv::OpExecutionModeId &&
-        op.opcode != spv::OpString &&
-        op.opcode != spv::OpSourceExtension &&
-        op.opcode != spv::OpSource &&
-        op.opcode != spv::OpSourceContinued &&
-        op.opcode != spv::OpName &&
-        op.opcode != spv::OpMemberName &&
-        op.opcode != spv::OpModuleProcessed) {
-      break;
-    }
-
-    _db.parse_instruction(op.opcode, op.args, op.nargs, current_function_id);
-    ++it;
-  }
-  _preamble = std::vector<uint32_t>((const uint32_t *)stream._words.data(), (const uint32_t *)it._words);
-
-  begin = it;
-  while (it != end) {
-    Instruction op = *it;
-    if (!op.is_annotation()) {
-      break;
-    }
-
-    _db.parse_instruction(op.opcode, op.args, op.nargs, current_function_id);
-    ++it;
-  }
-  _annotations = std::vector<uint32_t>(begin._words, it._words);
-
-  begin = it;
-  while (it != end) {
-    Instruction op = *it;
-    if (op.opcode == spv::OpFunction) {
-      break;
-    }
-
-    _db.parse_instruction(op.opcode, op.args, op.nargs, current_function_id);
-    ++it;
-  }
-  _definitions = std::vector<uint32_t>(begin._words, it._words);
-
-  begin = it;
-  while (it != end) {
-    Instruction op = *it;
-    _db.parse_instruction(op.opcode, op.args, op.nargs, current_function_id);
-    ++it;
-  }
-  _functions = std::vector<uint32_t>(begin._words, it._words);
+SpirVTransformer(const InstructionStream &stream) : _module(stream) {
 }
 
 /**
  * Runs the given transformation pass object (which can be used only once) on
- * the module stored in the SpirVTransformer, and updates the database.
+ * the module.  Afterwards, merges any duplicate unique-type declarations the
+ * pass may have created and reconciles the database with the module, so that
+ * the database always ends up identical to a fresh parse of the result (see
+ * validate_db).
  */
 void SpirVTransformer::
 run(SpirVTransformPass &pass) {
-  pass._db = std::move(_db);
+  // A pass object carries per-run state and may only be used once.
+  nassertv(!pass._ran);
+  pass._ran = true;
 
-  // Put this in before preprocess(), since it contains the ID bound
-  pass._new_preamble.insert(pass._new_preamble.end(), _preamble.begin(), _preamble.begin() + 5);
+  pass.run(_module);
 
-  pass.preprocess();
-  pass.process_preamble(_preamble);
-  pass.process_annotations(_annotations);
-  pass.process_definitions(_definitions);
-  pass.process_functions(_functions);
-  pass.postprocess();
-
-  _preamble = std::move(pass._new_preamble);
-  _annotations = std::move(pass._new_annotations);
-  _definitions = std::move(pass._new_definitions);
-  _functions = std::move(pass._new_functions);
-
-  _db = std::move(pass._db);
-
-  for (uint32_t id : pass._deleted_ids) {
-    _db.modify_definition(id).clear();
-  }
-  for (const auto &pair : pass._deleted_members) {
-    SpirVResultDatabase::Definition &def = _db.modify_definition(pair.first);
-
-    // The set contains original member indices, so erase in descending order,
-    // which leaves the positions of the members yet to be erased unaffected.
-    for (auto rit = pair.second.rbegin(); rit != pair.second.rend(); ++rit) {
-      nassertd(*rit < def._members.size()) continue;
-      def._members.erase(def._members.begin() + *rit);
-    }
-
-#ifndef NDEBUG
-    for (size_t i = 0; i < def._members.size(); ++i) {
-      nassertd(def._members[i]._new_index == (int)i) break;
-    }
-#endif
-  }
+  _module.deduplicate_types();
+  _module.reparse_db();
 }
 
 /**
- *
+ * Serializes the current state of the module.
  */
 ShaderModuleSpirV::InstructionStream SpirVTransformer::
 get_result() const {
-  InstructionStream stream(_preamble);
-  stream._words.insert(stream._words.end(), _annotations.begin(), _annotations.end());
-  stream._words.insert(stream._words.end(), _definitions.begin(), _definitions.end());
-  stream._words.insert(stream._words.end(), _functions.begin(), _functions.end());
-  return stream;
+  return _module.emit();
 }
 
 /**
  * Checks that the definition database, which is updated incrementally by the
- * transform passes, is consistent with a database that is freshly parsed from
- * the resulting module.  Logs an error for every mismatch and returns false
- * if any was found.  Intended for validation in the test suite.
+ * transform passes and reconciled after each pass, is consistent with a
+ * database that is freshly parsed from the resulting module.  Logs an error
+ * for every mismatch and returns false if any was found.  Intended for
+ * validation in the test suite.
  *
  * Names are not compared, since the database keeps qualified names (such as
  * "block.member" after running SpirVFlattenStructPass) that intentionally
@@ -157,8 +64,11 @@ get_result() const {
  */
 bool SpirVTransformer::
 validate_db() const {
-  SpirVTransformer fresh(get_result());
+  SpirVModule fresh(get_result());
   nassertr(get_id_bound() == fresh.get_id_bound(), false);
+
+  const SpirVResultDatabase &db = _module.get_db();
+  const SpirVResultDatabase &fresh_db = fresh.get_db();
 
   bool consistent = true;
   auto report = [&](uint32_t id, const char *field, int64_t db_value, int64_t fresh_value) {
@@ -194,8 +104,8 @@ validate_db() const {
   };
 
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &db_def = _db.get_definition(id);
-    const Definition &fresh_def = fresh._db.get_definition(id);
+    const Definition &db_def = db.get_definition(id);
+    const Definition &fresh_def = fresh_db.get_definition(id);
 
     if (db_def._dtype != fresh_def._dtype) {
       if (!is_expression(db_def) || !is_expression(fresh_def)) {
@@ -300,8 +210,14 @@ validate_db() const {
     }
 
     if (db_def.is_function() || db_def.is_function_type()) {
-      if (db_def._parameters != fresh_def._parameters) {
+      if (db_def._parameters.size() != fresh_def._parameters.size()) {
         report(id, "parameter count", db_def._parameters.size(), fresh_def._parameters.size());
+      } else {
+        for (size_t pi = 0; pi < db_def._parameters.size(); ++pi) {
+          if (db_def._parameters[pi] != fresh_def._parameters[pi]) {
+            report(id, "parameter", db_def._parameters[pi], fresh_def._parameters[pi]);
+          }
+        }
       }
     }
 
@@ -345,14 +261,15 @@ validate_db() const {
  */
 void SpirVTransformer::
 assign_interface_locations(ShaderModule::Stage stage) {
+  const SpirVResultDatabase &db = _module.get_db();
+
   // Determine which locations have already been assigned.
   bool has_unassigned_locations = false;
   BitArray input_locations;
   BitArray output_locations;
-  BitArray uniform_locations;
 
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &def = _db.get_definition(id);
+    const Definition &def = db.get_definition(id);
     if (def.is_variable()) {
       if (!def.has_location()) {
         if (!def.is_builtin() &&
@@ -375,11 +292,10 @@ assign_interface_locations(ShaderModule::Stage stage) {
     return;
   }
 
-  // Insert decorations for every unassigned variable at the beginning of the
-  // annotations block.
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    Definition &def = _db.modify_definition(id);
-    if (def.is_variable() && !def.has_location() && !def.is_builtin()) {
+    const Definition &def = db.get_definition(id);
+    if (def.is_variable() && !def.has_location() && !def.is_builtin() &&
+        def._type != nullptr) {
       int location;
       int num_locations;
       const char *sc_str;
@@ -430,8 +346,7 @@ assign_interface_locations(ShaderModule::Stage stage) {
         }
       }
 
-      def._location = location;
-      _annotations.insert(_annotations.end(), {spv::OpDecorate | (4 << spv::WordCountShift), id, spv::DecorationLocation, (uint32_t)location});
+      _module.decorate(id, spv::DecorationLocation, (uint32_t)location);
     }
   }
 }
@@ -441,30 +356,8 @@ assign_interface_locations(ShaderModule::Stage stage) {
  */
 void SpirVTransformer::
 assign_locations(pmap<uint32_t, int> remap) {
-  // Replace existing locations.
-  InstructionIterator it(_annotations.data());
-  InstructionIterator end(_annotations.data() + _annotations.size());
-  while (it != end) {
-    Instruction op = *it;
-
-    if (op.opcode == spv::OpDecorate &&
-        (spv::Decoration)op.args[1] == spv::DecorationLocation && op.nargs >= 3) {
-      auto it = remap.find(op.args[0]);
-      if (it != remap.end()) {
-        _db.modify_definition(op.args[0])._location = it->second;
-        op.args[2] = it->second;
-        remap.erase(it);
-      }
-    }
-
-    ++it;
-  }
-
-  // Insert decorations for every unassigned variable at the beginning of the
-  // annotations block.
-  for (auto it = remap.begin(); it != remap.end(); ++it) {
-    _db.modify_definition(it->first)._location = it->second;
-    _annotations.insert(_annotations.end(), {spv::OpDecorate | (4 << spv::WordCountShift), it->first, spv::DecorationLocation, (uint32_t)it->second});
+  for (const auto &item : remap) {
+    _module.set_location(item.first, item.second);
   }
 }
 
@@ -473,8 +366,10 @@ assign_locations(pmap<uint32_t, int> remap) {
  */
 void SpirVTransformer::
 assign_flat_decorations() {
+  const SpirVResultDatabase &db = _module.get_db();
+
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &def = _db.get_definition(id);
+    const Definition &def = db.get_definition(id);
     if (def.is_variable() && !def.is_builtin() && def._storage_class == spv::StorageClassOutput && (def._flags & SpirVResultDatabase::DF_flat) == 0) {
       if (def._type->contains_scalar_type(ShaderType::ST_int) ||
           def._type->contains_scalar_type(ShaderType::ST_uint) ||
@@ -486,8 +381,7 @@ assign_flat_decorations() {
         }
         //TODO: handle assigning "flat" to struct members.
         if (unwrapped->as_struct() == nullptr) {
-          _annotations.insert(_annotations.end(), {spv::OpDecorate | (3 << spv::WordCountShift), id, spv::DecorationFlat});
-          _db.modify_definition(id)._flags |= SpirVResultDatabase::DF_flat;
+          _module.decorate(id, spv::DecorationFlat);
         }
       }
     }
@@ -499,31 +393,10 @@ assign_flat_decorations() {
  */
 void SpirVTransformer::
 assign_procedural_names(const char *prefix, const pmap<uint32_t, int> &suffixes) {
-  // Remove existing names matching theses ids.
-  auto it = _preamble.begin() + 5;
-  while (it != _preamble.end()) {
-    spv::Op opcode = (spv::Op)(*it & spv::OpCodeMask);
-    uint32_t wcount = *it >> spv::WordCountShift;
-    nassertd(wcount > 0) break;
-
-    if (opcode == spv::OpName && wcount >= 2) {
-      if (suffixes.count(*(it + 1))) {
-        it = _preamble.erase(it, it + wcount);
-        continue;
-      }
-    }
-
-    std::advance(it, wcount);
-  }
-
-  // Insert names before the annotations block.
-  uint32_t *words = (uint32_t *)alloca(sizeof(uint32_t) + strlen(prefix) + 32);
-  for (auto it = suffixes.begin(); it != suffixes.end(); ++it) {
-    words[1] = it->first;
-    int len = sprintf((char *)(words + 2), "%s%d", prefix, it->second);
-    uint32_t num_words = len / 4 + 3;
-    words[0] = spv::OpName | (num_words << spv::WordCountShift);
-    _preamble.insert(_preamble.end(), words, words + num_words);
+  char buffer[32];
+  for (const auto &item : suffixes) {
+    sprintf(buffer, "%d", item.second);
+    _module.set_name(item.first, std::string(prefix) + buffer);
   }
 }
 
@@ -532,22 +405,15 @@ assign_procedural_names(const char *prefix, const pmap<uint32_t, int> &suffixes)
  */
 void SpirVTransformer::
 strip_uniform_locations() {
-  auto it = _annotations.begin();
-  while (it != _annotations.end()) {
-    spv::Op opcode = (spv::Op)(*it & spv::OpCodeMask);
-    uint32_t wcount = *it >> spv::WordCountShift;
-    nassertd(wcount > 0) break;
+  SpirVResultDatabase &db = _module.modify_db();
 
-    if (opcode == spv::OpDecorate && wcount >= 3 && *(it + 2) == spv::DecorationLocation) {
-      Definition &def = _db.modify_definition(*(it + 1));
-      if (def._storage_class == spv::StorageClassUniformConstant) {
-        it = _annotations.erase(it, it + wcount);
-        def._location = -1;
-        continue;
-      }
+  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+    Definition &def = db.modify_definition(id);
+    if (def.is_variable() && def.has_location() &&
+        def._storage_class == spv::StorageClassUniformConstant) {
+      _module.remove_decoration(id, spv::DecorationLocation);
+      def._location = -1;
     }
-
-    std::advance(it, wcount);
   }
 }
 
@@ -556,23 +422,8 @@ strip_uniform_locations() {
  */
 void SpirVTransformer::
 strip_bindings() {
-  auto it = _annotations.begin();
-  while (it != _annotations.end()) {
-    spv::Op opcode = (spv::Op)(*it & spv::OpCodeMask);
-    uint32_t wcount = *it >> spv::WordCountShift;
-    nassertd(wcount > 0) break;
-
-    if (opcode == spv::OpDecorate && wcount >= 3) {
-      spv::Decoration decoration = (spv::Decoration)*(it + 2);
-      if (decoration == spv::DecorationBinding ||
-          decoration == spv::DecorationDescriptorSet) {
-        it = _annotations.erase(it, it + wcount);
-        continue;
-      }
-    }
-
-    std::advance(it, wcount);
-  }
+  _module.strip_decoration(spv::DecorationBinding);
+  _module.strip_decoration(spv::DecorationDescriptorSet);
 }
 
 /**
@@ -581,45 +432,11 @@ strip_bindings() {
  */
 void SpirVTransformer::
 bind_descriptor_set(uint32_t set, const pvector<uint32_t> &ids) {
-  InstructionIterator it(_annotations.data());
-  InstructionIterator end(_annotations.data() + _annotations.size());
-
-  BitArray assigned_sets;
-  BitArray assigned_bindings;
-
-  while (it != end) {
-    Instruction op = *it;
-
-    if (op.opcode == spv::OpDecorate && op.nargs >= 3 &&
-        (op.args[1] == spv::DecorationBinding ||
-         op.args[1] == spv::DecorationDescriptorSet)) {
-      auto iit = std::find(ids.begin(), ids.end(), op.args[0]);
-      if (iit != ids.end()) {
-        uint32_t binding = std::distance(ids.begin(), iit);
-        if (op.args[1] == spv::DecorationBinding) {
-          op.args[2] = binding;
-          assigned_bindings.set_bit(binding);
-        }
-        else if (op.args[1] == spv::DecorationDescriptorSet) {
-          op.args[2] = set;
-          assigned_sets.set_bit(binding);
-        }
-      }
-    }
-
-    ++it;
-  }
-
-  // Anything left?
   for (uint32_t binding = 0; binding < ids.size(); ++binding) {
     uint32_t id = ids[binding];
     if (id > 0) {
-      if (!assigned_sets.get_bit(binding)) {
-        _annotations.insert(_annotations.end(), {spv::OpDecorate | (4 << spv::WordCountShift), id, spv::DecorationDescriptorSet, set});
-      }
-      if (!assigned_bindings.get_bit(binding)) {
-        _annotations.insert(_annotations.end(), {spv::OpDecorate | (4 << spv::WordCountShift), id, spv::DecorationBinding, binding});
-      }
+      _module.set_decoration(id, spv::DecorationDescriptorSet, set);
+      _module.set_decoration(id, spv::DecorationBinding, binding);
     }
   }
 }

@@ -17,46 +17,53 @@
  *
  */
 void SpirVRemoveUnusedVariablesPass::
-preprocess() {
+run(SpirVModule &module) {
+  const SpirVResultDatabase &db = module.get_db();
   pmap<uint32_t, BitArray> ftype_params_used;
+  pset<uint32_t> dead_ids;
 
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    Definition &def = _db.modify_definition(id);
+  for (uint32_t id = 0; id < module.get_id_bound(); ++id) {
+    const Definition &def = db.get_definition(id);
 
     if (def.is_variable() && !def.is_used()) {
       if (shader_cat.is_debug()) {
         shader_cat.debug()
           << "Removing unused variable " << def._name << " (" << id << ")\n";
       }
-      def.clear();
-      delete_id(id);
+      module.delete_id(id);
+      dead_ids.insert(id);
     }
-    if (def.is_function()) {
+    else if (def.is_function()) {
       for (size_t i = 0; i < def._parameters.size(); ++i) {
         uint32_t param_id = def._parameters[i];
-        const Definition &param_def = _db.get_definition(param_id);
-        if (param_def.is_used() || !_db.get_definition(param_def._type_id).is_pointer_type()) {
+        const Definition &param_def = db.get_definition(param_id);
+        if (param_def.is_used() || !db.get_definition(param_def._type_id).is_pointer_type()) {
           ftype_params_used[def._type_id].set_bit(i);
         }
       }
     }
   }
 
-  for (auto it = ftype_params_used.begin(); it != ftype_params_used.end(); ++it) {
-    uint32_t func_type_id = it->first;
-    const Definition &def = _db.get_definition(func_type_id);
+  // Remove any access chains and pointer copies based on the deleted
+  // variables (a chain that is never loaded or stored does not mark its
+  // variable used, so these may exist).
+  module.delete_dead_code(dead_ids);
 
+  for (const auto &item : ftype_params_used) {
+    uint32_t func_type_id = item.first;
+    const Definition &def = db.get_definition(func_type_id);
+
+    pset<uint32_t> deleted_params;
     for (size_t i = 0; i < def._parameters.size(); ++i) {
-      if (!it->second.get_bit(i)) {
+      if (!item.second.get_bit(i)) {
         if (shader_cat.is_debug()) {
           shader_cat.debug()
             << "Removing unused function parameter " << i
             << " from function type " << func_type_id << "\n";
         }
-        delete_function_parameter(func_type_id, i);
+        deleted_params.insert((uint32_t)i);
       }
     }
+    module.remove_function_parameters(func_type_id, deleted_params);
   }
-
-  // This is really all we need to do; the base class takes care of deletions.
 }

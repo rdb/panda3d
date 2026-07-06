@@ -56,21 +56,21 @@ public:
   void setup_instancing_attrib(int instance_mat_location);
   void mark_model_matrix(uint32_t id, bool inverse, bool transpose);
 
-  virtual void preprocess();
-  virtual bool transform_entry_point(spv::ExecutionModel model, uint32_t id, const char *name, pvector<uint32_t> &vars);
-  virtual bool transform_annotation_op(Instruction op);
-  virtual bool transform_definition_op(Instruction op);
-  virtual bool transform_function_op(Instruction op);
-  virtual void postprocess();
+  virtual void run(SpirVModule &module) override;
 
 private:
-  void inject_animation(const pvector<uint32_t> &vars);
-  void inject_animation_noop(const pvector<uint32_t> &vars);
-  void inject_instancing();
-  void inject_instancing_noop();
+  void inject_animation(SpirVBuilder &builder, const pvector<uint32_t> &vars);
+  void inject_animation_noop(SpirVBuilder &builder, const pvector<uint32_t> &vars);
+  void inject_instancing(SpirVBuilder &builder);
+  void inject_instancing_noop(SpirVBuilder &builder);
 
   void define_transform_block();
   static const ShaderType *make_transform_block_type(uint32_t num_elements);
+
+  pvector<uint32_t> make_interface(const pvector<uint32_t> &vars,
+                                   bool with_animation, bool with_instancing) const;
+
+  SpirVModule *_module = nullptr;
 
 public:
   // Settings that could be related to both instancing and animation.

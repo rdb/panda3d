@@ -25,44 +25,54 @@ private:
 
 public:
   enum DefinitionFlags {
-    DF_used = 1,
+    DF_used = 1 << 0,
 
-    // Set for image types that have the "depth" flag set
-    DF_depth_image = 2,
+    // Set for variables if the size/levels of an image therein was queried.
+    DF_queried_image_size_levels = 1 << 1,
 
     // Set on variables to indicate that they were used by a texture sample op,
     // respectively one with and without depth comparison
-    DF_dref_sampled = 4,
-    DF_non_dref_sampled = 8,
+    DF_dref_sampled = 1 << 2,
+    DF_non_dref_sampled = 1 << 3,
 
     // Set if we know for sure that this can be const-evaluated.
-    DF_constant_expression = 16,
+    DF_constant_expression = 1 << 4,
 
     // Set for arrays that are indexed with a non-const index.
-    DF_dynamically_indexed = 32,
+    DF_dynamically_indexed = 1 << 5,
 
     // Has the "buffer block" decoration (older versions of SPIR-V),
     // or the "block" decoration on newer versions.
-    DF_buffer_block = 64,
-    DF_block = 128,
+    DF_buffer_block = 1 << 6,
+    DF_block = 1 << 7,
 
     // If both of these are set, no access is permitted (size queries only)
-    DF_non_writable = 256, // readonly
-    DF_non_readable = 512, // writeonly
+    DF_non_writable = 1 << 8, // readonly
+    DF_non_readable = 1 << 9, // writeonly
 
-    DF_relaxed_precision = 1024,
+    DF_relaxed_precision = 1 << 10,
 
-    DF_null_constant = 2048,
+    DF_null_constant = 1 << 11,
+
+    // Set for image types that have the "depth" flag set
+    DF_depth_image = 1 << 12,
+
+    // Set for image types that have the "not depth" flag set
+    DF_non_depth_image = 1 << 13,
 
     // Set for temporaries if the original origin was a sampled image, even
     // if we extracted the image using OpImage.
-    DF_sampled_image = 4096,
+    // Also set for OpTypeImage that has the sampled flag set.
+    DF_sampled_image = 1 << 14,
 
-    // Set for variables if the size/levels of an image therein was queried.
-    DF_queried_image_size_levels = 8192,
+    // Set for OpTypeImage that has the storage image flag set.
+    DF_storage_image = 1 << 15,
 
     // The "flat" decoration, set for input/output variables or struct members
-    DF_flat = 16384,
+    DF_flat = 1 << 16,
+
+    // Set for OpTypeImage that has the multisample flag set.
+    DF_multisampled_image = 1 << 17,
   };
 
   /**
@@ -100,8 +110,11 @@ public:
     pvector<uint32_t> _parameters;
     int _flags = 0;
 
-    // Only defined for DT_variable and DT_pointer_type.
-    spv::StorageClass _storage_class;
+    // Only meaningful for DT_variable and DT_pointer_type.
+    spv::StorageClass _storage_class = spv::StorageClassMax;
+
+    // Only for OpTypeImage.
+    spv::ImageFormat _image_format = spv::ImageFormatUnknown;
 
     INLINE bool is_type() const;
     INLINE bool is_pointer_type() const;
@@ -146,7 +159,12 @@ public:
   uint32_t find_function_type();
   uint32_t find_null_constant(uint32_t type_id);
 
-  void record_type(uint32_t id, const ShaderType *type);
+  INLINE bool is_canonical_type(uint32_t type_id) const;
+
+  static bool is_unique_type_opcode(spv::Op opcode);
+  void forget_type(uint32_t id);
+
+  void record_type(uint32_t id, const ShaderType *type, bool canonical=true);
   void record_pointer_type(uint32_t id, spv::StorageClass storage_class, uint32_t type_id);
   void record_function_type(uint32_t id, uint32_t return_type_id, const uint32_t *params, uint32_t nparams);
   void record_variable(uint32_t id, uint32_t pointer_type_id, spv::StorageClass storage_class, uint32_t function_id=0);
@@ -170,11 +188,12 @@ private:
   Definitions _defs;
 
   // Reverse mapping from type to ID.  Excludes types with BuiltIn decoration.
+  // This is a lookup structure for reusing existing declarations; it is not
+  // what SPIR-V's type uniqueness rules rest on (if it misses and a duplicate
+  // declaration gets emitted, the finalization sweep run by the
+  // SpirVTransformer merges the two afterwards).
   typedef pmap<const ShaderType *, uint32_t> TypeMap;
   mutable TypeMap _type_map;
-
-  // Holds the type id for a function taking no arguments and returning void.
-  uint32_t _void_function_type_id = 0;
 };
 
 #include "spirVResultDatabase.I"

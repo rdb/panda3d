@@ -17,42 +17,35 @@
 #include "catch_amalgamated.hpp"
 
 TEST_CASE("SpirVFlattenStructPass turns struct members into variables", "[shaderpipeline]") {
-  enum : uint32_t {
-    id_main = 1, id_void, id_fnvoid, id_float, id_vec2,
-    id_struct, id_ptr_uc_struct, id_var,
-    id_int, id_const_0, id_ptr_uc_float,
-    id_label, id_chain, id_value,
-    id_bound,
-  };
-
   // struct S { float a; vec2 b; }; uniform S s;  main() loads s.a.
-  ModuleBuilder b;
-  b.op(spv::OpCapability, {spv::CapabilityShader});
-  b.op(spv::OpMemoryModel, {spv::AddressingModelLogical, spv::MemoryModelGLSL450});
-  b.op(spv::OpEntryPoint, {spv::ExecutionModelFragment, id_main}, "main");
-  b.op(spv::OpExecutionMode, {id_main, spv::ExecutionModeOriginUpperLeft});
-  b.op(spv::OpName, {id_struct}, "S");
-  b.op(spv::OpMemberName, {id_struct, 0}, "a");
-  b.op(spv::OpMemberName, {id_struct, 1}, "b");
-  b.op(spv::OpName, {id_var}, "s");
-  b.op(spv::OpTypeVoid, {id_void});
-  b.op(spv::OpTypeFunction, {id_fnvoid, id_void});
-  b.op(spv::OpTypeFloat, {id_float, 32});
-  b.op(spv::OpTypeVector, {id_vec2, id_float, 2});
-  b.op(spv::OpTypeStruct, {id_struct, id_float, id_vec2});
-  b.op(spv::OpTypePointer, {id_ptr_uc_struct, spv::StorageClassUniformConstant, id_struct});
-  b.op(spv::OpTypeInt, {id_int, 32, 1});
-  b.op(spv::OpConstant, {id_int, id_const_0, 0});
-  b.op(spv::OpTypePointer, {id_ptr_uc_float, spv::StorageClassUniformConstant, id_float});
-  b.op(spv::OpVariable, {id_ptr_uc_struct, id_var, spv::StorageClassUniformConstant});
-  b.op(spv::OpFunction, {id_void, id_main, spv::FunctionControlMaskNone, id_fnvoid});
-  b.op(spv::OpLabel, {id_label});
-  b.op(spv::OpAccessChain, {id_ptr_uc_float, id_chain, id_var, id_const_0});
-  b.op(spv::OpLoad, {id_float, id_value, id_chain});
-  b.op(spv::OpReturn, {});
-  b.op(spv::OpFunctionEnd, {});
+  SpirVModule module = make_module();
+  const ShaderType *vec2_type =
+    ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 2));
 
-  InstructionStream stream = b.build(id_bound);
+  ShaderType::Struct st;
+  st.add_member(ShaderType::FLOAT, "a");
+  st.add_member(vec2_type, "b");
+  const ShaderType *struct_type = ShaderType::register_type(std::move(st));
+
+  uint32_t id_struct = module.define_type(struct_type);
+  module.set_name(id_struct, "S");
+  module.set_member_name(id_struct, 0, "a");
+  module.set_member_name(id_struct, 1, "b");
+
+  uint32_t id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
+  module.set_name(id_var, "s");
+
+  uint32_t id_float = module.define_type(ShaderType::FLOAT);
+  uint32_t id_const_0 = module.define_int_constant(0);
+
+  uint32_t main_id = add_main(module, spv::ExecutionModelFragment);
+  {
+    SpirVBuilder builder = builder_before_return(module, main_id);
+    uint32_t chain = builder.op_access_chain(id_var, {id_const_0});
+    builder.op_load(chain);
+  }
+
+  InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
 
   SpirVTransformer transformer(stream);
@@ -71,8 +64,7 @@ TEST_CASE("SpirVFlattenStructPass turns struct members into variables", "[shader
   REQUIRE(var_a != 0);
   REQUIRE(var_b != 0);
   CHECK(db.get_definition(var_a)._type == ShaderType::FLOAT);
-  CHECK(db.get_definition(var_b)._type ==
-        ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 2)));
+  CHECK(db.get_definition(var_b)._type == vec2_type);
 
   // The access chain is gone; the load reads the new variable directly.
   CHECK(count_op(result, spv::OpAccessChain) == 0);

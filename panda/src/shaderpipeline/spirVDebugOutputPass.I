@@ -33,7 +33,7 @@ get_uint_constant(uint32_t v) {
     _numbers.resize(v + 1, 0u);
   }
   if (_numbers[v] == 0u) {
-    _numbers[v] = define_constant(ShaderType::UINT, v);
+    _numbers[v] = _module->define_constant(ShaderType::UINT, v);
   }
   return _numbers[v];
 }

@@ -17,44 +17,31 @@
 #include "catch_amalgamated.hpp"
 
 TEST_CASE("SpirVInjectVertexTransformPass injects transforms", "[shaderpipeline]") {
-  enum : uint32_t {
-    id_main = 1, id_void, id_fnvoid, id_float, id_vec4, id_mat4,
-    id_ptr_in_vec4, id_ptr_out_vec4, id_ptr_uc_mat4,
-    id_vertex, id_out, id_mv,
-    id_label, id_load_mat, id_load_vtx, id_xformed,
-    id_bound,
-  };
-
   // in vec4 vertex; uniform mat4 mv;  main() { out_pos = mv * vertex; }
-  ModuleBuilder b;
-  b.op(spv::OpCapability, {spv::CapabilityShader});
-  b.op(spv::OpMemoryModel, {spv::AddressingModelLogical, spv::MemoryModelGLSL450});
-  b.op(spv::OpEntryPoint, {spv::ExecutionModelVertex, id_main}, "main", {id_vertex, id_out});
-  b.op(spv::OpName, {id_vertex}, "vertex");
-  b.op(spv::OpName, {id_mv}, "p3d_ModelViewMatrix");
-  b.op(spv::OpDecorate, {id_vertex, spv::DecorationLocation, 0});
-  b.op(spv::OpDecorate, {id_out, spv::DecorationLocation, 0});
-  b.op(spv::OpTypeVoid, {id_void});
-  b.op(spv::OpTypeFunction, {id_fnvoid, id_void});
-  b.op(spv::OpTypeFloat, {id_float, 32});
-  b.op(spv::OpTypeVector, {id_vec4, id_float, 4});
-  b.op(spv::OpTypeMatrix, {id_mat4, id_vec4, 4});
-  b.op(spv::OpTypePointer, {id_ptr_in_vec4, spv::StorageClassInput, id_vec4});
-  b.op(spv::OpTypePointer, {id_ptr_out_vec4, spv::StorageClassOutput, id_vec4});
-  b.op(spv::OpTypePointer, {id_ptr_uc_mat4, spv::StorageClassUniformConstant, id_mat4});
-  b.op(spv::OpVariable, {id_ptr_in_vec4, id_vertex, spv::StorageClassInput});
-  b.op(spv::OpVariable, {id_ptr_out_vec4, id_out, spv::StorageClassOutput});
-  b.op(spv::OpVariable, {id_ptr_uc_mat4, id_mv, spv::StorageClassUniformConstant});
-  b.op(spv::OpFunction, {id_void, id_main, spv::FunctionControlMaskNone, id_fnvoid});
-  b.op(spv::OpLabel, {id_label});
-  b.op(spv::OpLoad, {id_mat4, id_load_mat, id_mv});
-  b.op(spv::OpLoad, {id_vec4, id_load_vtx, id_vertex});
-  b.op(spv::OpMatrixTimesVector, {id_vec4, id_xformed, id_load_mat, id_load_vtx});
-  b.op(spv::OpStore, {id_out, id_xformed});
-  b.op(spv::OpReturn, {});
-  b.op(spv::OpFunctionEnd, {});
+  SpirVModule module = make_module();
+  const ShaderType *vec4_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
+  const ShaderType *mat4_type = ShaderType::register_type(ShaderType::Matrix(ShaderType::ST_float, 4, 4));
 
-  InstructionStream stream = b.build(id_bound);
+  uint32_t id_vertex = module.define_variable(vec4_type, spv::StorageClassInput);
+  module.decorate(id_vertex, spv::DecorationLocation, 0u);
+  module.set_name(id_vertex, "vertex");
+
+  uint32_t id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
+  module.decorate(id_out, spv::DecorationLocation, 0u);
+
+  uint32_t id_mv = module.define_variable(mat4_type, spv::StorageClassUniformConstant);
+  module.set_name(id_mv, "p3d_ModelViewMatrix");
+
+  uint32_t id_main = add_main(module, spv::ExecutionModelVertex, {id_vertex, id_out});
+  {
+    SpirVBuilder builder = builder_before_return(module, id_main);
+    uint32_t load_mat = builder.op_load(id_mv);
+    uint32_t load_vtx = builder.op_load(id_vertex);
+    uint32_t xformed = builder.op_multiply(load_mat, load_vtx);
+    builder.op_store(id_out, xformed);
+  }
+
+  InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
 
   SECTION("animation transforms the vertex inputs") {

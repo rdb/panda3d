@@ -25,12 +25,11 @@ public:
   SpirVMakeBlockPass(const ShaderType::Struct *block_type, const pvector<uint32_t> &member_ids,
                      spv::StorageClass storage_class, uint32_t binding=0, uint32_t set=0);
 
-  virtual bool begin_function(Instruction op);
-  virtual bool transform_function_op(Instruction op);
-
-  bool maybe_replace_with_access_chain(uint32_t &id);
+  virtual void run(SpirVModule &module) override;
 
 private:
+  bool maybe_replace_with_access_chain(SpirVBuilder &builder, uint32_t &id);
+
   const ShaderType::Struct *_block_type;
   const spv::StorageClass _storage_class;
   const uint32_t _binding;

@@ -16,181 +16,208 @@
 /**
  *
  */
-bool SpirVEmulateTextureQueriesPass::
-transform_definition_op(Instruction op) {
-  switch (op.opcode) {
-  case spv::OpTypeImage:
-    if (_emulate_caps & Shader::C_sampler_cube_shadow) {
-      if (op.args[2] == spv::DimCube && op.args[3] > 0) {
-        op.args[3] = 0;
+void SpirVEmulateTextureQueriesPass::
+run(SpirVModule &module) {
+  const SpirVResultDatabase &db = module.get_db();
+
+  if (_emulate_caps & Shader::C_sampler_cube_shadow) {
+    // Cube shadow samplers are not supported; the Dref sample operations are
+    // rewritten below to do the depth comparison in the shader, so these
+    // must become regular, non-depth cube image types.  Any sampled image
+    // and pointer types that consequently become duplicates are merged by
+    // the deduplication that runs after the pass.
+    pvector<std::pair<uint32_t, uint32_t> > replacements;
+    for (const Instruction &op : module.get_globals()) {
+      if (op.opcode == spv::OpTypeImage && op.args.size() >= 8 &&
+          op.args[2] == spv::DimCube && op.args[3] > 0) {
+        uint32_t new_id = module.define_image_type(
+          db.get_definition(op.args[0])._type, 0, op.args[6],
+          (spv::ImageFormat)op.args[7]);
+        nassertd(new_id != 0) continue;
+        replacements.push_back(std::make_pair(op.args[0], new_id));
       }
     }
-    break;
-
-  case spv::OpVariable:
-    if (op.nargs >= 3) {
-      if (_emulate_caps & (Shader::C_image_query_size | Shader::C_texture_query_size | Shader::C_texture_query_levels)) {
-        uint32_t var_id = op.args[1];
-        const Definition &var_def = _db.get_definition(var_id);
-        if (var_def._flags & SpirVResultDatabase::DF_queried_image_size_levels) {
-          _access_chains.insert({var_id, AccessChain(var_id)});
-        }
-      }
-      return true;
+    // Apply afterwards, since define_image_type appends to the globals we
+    // are iterating.
+    for (const auto &item : replacements) {
+      module.replace_type_id(item.first, item.second);
     }
-    break;
-
-  default:
-    return SpirVTransformPass::transform_definition_op(op);
   }
 
-  return true;
-}
-
-/**
- *
- */
-bool SpirVEmulateTextureQueriesPass::
-transform_function_op(Instruction op) {
-  switch (op.opcode) {
-  case spv::OpAccessChain:
-  case spv::OpInBoundsAccessChain:
-    if (op.nargs >= 4) {
-      auto it = _access_chains.find(op.args[2]);
-      if (it == _access_chains.end()) {
-        return true;
-      }
-      AccessChain chain = it->second;
-      uint32_t parent_id = unwrap_pointer_type(get_type_id(op.args[2]));
-
-      for (size_t i = 3; i < op.nargs; ++i) {
-        const Definition &index_def = _db.get_definition(op.args[i]);
-        if (!index_def.is_constant()) {
-          return true;
-        }
-        uint32_t index = index_def._constant;
-        chain.append(index);
-
-        const Definition &def = _db.get_definition(parent_id);
-        if (def._members.empty()) { // array
-          parent_id = def._type_id;
-          nassertr(parent_id > 0, false);
-        } else {
-          // Must be a struct.
-          parent_id = def._members[index]._type_id;
-        }
-      }
-
-      _access_chains.insert({op.args[1], std::move(chain)});
-    }
-    break;
-
-  case spv::OpLoad:
-  case spv::OpCopyObject:
-  case spv::OpCopyLogical:
-  case spv::OpExpectKHR:
-  case spv::OpImage:
-  case spv::OpSampledImage:
-    if (op.nargs >= 3) {
-      auto it = _access_chains.find(op.args[2]);
-      if (it != _access_chains.end()) {
-        _access_chains.insert({op.args[1], it->second});
+  if (_emulate_caps & (Shader::C_image_query_size | Shader::C_texture_query_size | Shader::C_texture_query_levels)) {
+    for (uint32_t id = 0; id < module.get_id_bound(); ++id) {
+      const Definition &def = db.get_definition(id);
+      if (def.is_variable() &&
+          (def._flags & SpirVResultDatabase::DF_queried_image_size_levels) != 0) {
+        _access_chains.insert({id, AccessChain(id)});
       }
     }
-    break;
+  }
 
-  case spv::OpImageSampleDrefImplicitLod:
-  case spv::OpImageSampleDrefExplicitLod:
-    if (_emulate_caps & Shader::C_sampler_cube_shadow) {
-      if (_float_one_id == 0) {
-        _float_one_id = define_float_constant(1.0f);
-      }
-      if (_float_zero_id == 0) {
-        _float_zero_id = define_float_constant(0.0f);
-      }
-
-      uint32_t sample = op_image_sample(op.args[2], op.args[3], op.nargs >= 6 ? op.args[5] : 0u, op.args + 6);
-      uint32_t depth = op_composite_extract(sample, {0});
-      uint32_t cmp = op_compare(spv::OpFOrdGreaterThan, depth, op.args[4]);
-      push_id(op.args[1]);
-      op_select(cmp, _float_one_id, _float_zero_id);
-      return false;
-    }
-    break;
-
-  case spv::OpImageQuerySize:
-  case spv::OpImageQuerySizeLod:
-    if ((_emulate_caps & (Shader::C_texture_query_size | Shader::C_image_query_size)) == 0) {
-      return true;
-    }
-    // fall through
-
-  case spv::OpImageQueryLevels:
-    if (op.nargs >= 3) {
-      if (op.opcode == spv::OpImageQueryLevels) {
-        if ((_emulate_caps & Shader::C_texture_query_levels) == 0) {
-          return true;
-        }
-      }
-
-      auto acit = _access_chains.find(op.args[2]);
-      if (acit == _access_chains.end()) {
-        return true;
-      }
-      const AccessChain &chain = acit->second;
-
-      if (op.opcode == spv::OpImageQuerySizeLod && op.nargs >= 4) {
-        const Definition &lod_def = _db.get_definition(op.args[3]);
-        if (!lod_def.is_constant(0)) {
-          // Can't handle a non-zero level of detail parameter.
-          return true;
-        }
-      }
-
-      uint32_t size_var_id;
-      auto it = _size_var_ids.find(chain);
-      if (it != _size_var_ids.end()) {
-        size_var_id = it->second;
-      } else {
-        // It's always a vec4, with number of levels in fourth component
-        const ShaderType *var_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
-        size_var_id = define_variable(var_type, spv::StorageClassUniformConstant);
-        _size_var_ids.insert({std::move(chain), size_var_id});
-      }
-
-      uint32_t temp = op_load(size_var_id);
-
-      // Grab the components we need out of the vec4 size variable.
-      if (op.opcode == spv::OpImageQueryLevels) {
-        temp = op_composite_extract(temp, {3});
-      }
-      else {
-        const ShaderType *result_type = resolve_type(op.args[0]);
-        if (result_type->as_scalar() != nullptr) {
-          temp = op_composite_extract(temp, {0});
-        }
-        else if (const ShaderType::Vector *vector = result_type->as_vector()) {
-          pvector<uint32_t> components;
-          for (size_t i = 0; i < vector->get_num_components(); ++i) {
-            components.push_back(i);
+  for (Function &function : module.modify_functions()) {
+    for (size_t i = 0; i < function.instructions.size(); ++i) {
+      Instruction &op = function.instructions[i];
+      switch (op.opcode) {
+      case spv::OpAccessChain:
+      case spv::OpInBoundsAccessChain:
+        if (op.args.size() >= 4) {
+          auto it = _access_chains.find(op.args[2]);
+          if (it == _access_chains.end()) {
+            break;
           }
-          temp = op_vector_shuffle(temp, temp, std::move(components));
+          AccessChain chain = it->second;
+          uint32_t parent_id = module.unwrap_pointer_type(module.get_type_id(op.args[2]));
+
+          bool constant_chain = true;
+          for (size_t ai = 3; ai < op.args.size(); ++ai) {
+            const Definition &index_def = db.get_definition(op.args[ai]);
+            if (!index_def.is_constant()) {
+              constant_chain = false;
+              break;
+            }
+            uint32_t index = index_def._constant;
+            chain.append(index);
+
+            const Definition &def = db.get_definition(parent_id);
+            if (def._members.empty()) { // array
+              parent_id = def._type_id;
+              nassertd(parent_id > 0) break;
+            } else {
+              // Must be a struct.
+              parent_id = def._members[index]._type_id;
+            }
+          }
+          if (constant_chain) {
+            _access_chains.insert({op.args[1], std::move(chain)});
+          }
         }
-        else {
-          nassertr(false, true);
-          return true;
+        break;
+
+      case spv::OpLoad:
+      case spv::OpCopyObject:
+      case spv::OpCopyLogical:
+      case spv::OpExpectKHR:
+      case spv::OpImage:
+      case spv::OpSampledImage:
+        if (op.args.size() >= 3) {
+          auto it = _access_chains.find(op.args[2]);
+          if (it != _access_chains.end()) {
+            _access_chains.insert({op.args[1], it->second});
+          }
         }
+        break;
+
+      case spv::OpImageSampleDrefImplicitLod:
+      case spv::OpImageSampleDrefExplicitLod:
+        if (_emulate_caps & Shader::C_sampler_cube_shadow) {
+          if (_float_one_id == 0) {
+            _float_one_id = module.define_float_constant(1.0f);
+          }
+          if (_float_zero_id == 0) {
+            _float_zero_id = module.define_float_constant(0.0f);
+          }
+
+          // Copy the instruction, since the insertions below invalidate the
+          // reference.
+          Instruction orig = op;
+
+          SpirVBuilder builder(module, function.id, i);
+          uint32_t sample = builder.op_image_sample(
+            orig.args[2], orig.args[3],
+            orig.args.size() >= 6 ? orig.args[5] : 0u,
+            orig.args.size() > 6 ? orig.args.data() + 6 : nullptr);
+          uint32_t depth = builder.op_composite_extract(sample, {0});
+          uint32_t cmp = builder.op_compare(spv::OpFOrdGreaterThan, depth, orig.args[4]);
+          builder.push_id(orig.args[1]);
+          builder.op_select(cmp, _float_one_id, _float_zero_id);
+
+          // Remove the original instruction, which follows the insertions.
+          size_t pos = builder.get_insertion_index();
+          function.instructions.erase(function.instructions.begin() + pos);
+          i = pos - 1;
+        }
+        break;
+
+      case spv::OpImageQuerySize:
+      case spv::OpImageQuerySizeLod:
+      case spv::OpImageQueryLevels:
+        if (op.args.size() >= 3) {
+          if (op.opcode == spv::OpImageQueryLevels) {
+            if ((_emulate_caps & Shader::C_texture_query_levels) == 0) {
+              break;
+            }
+          }
+          else if ((_emulate_caps & (Shader::C_texture_query_size | Shader::C_image_query_size)) == 0) {
+            break;
+          }
+
+          auto acit = _access_chains.find(op.args[2]);
+          if (acit == _access_chains.end()) {
+            break;
+          }
+          const AccessChain &chain = acit->second;
+
+          if (op.opcode == spv::OpImageQuerySizeLod && op.args.size() >= 4) {
+            const Definition &lod_def = db.get_definition(op.args[3]);
+            if (!lod_def.is_constant(0)) {
+              // Can't handle a non-zero level of detail parameter.
+              break;
+            }
+          }
+
+          uint32_t size_var_id;
+          auto it = _size_var_ids.find(chain);
+          if (it != _size_var_ids.end()) {
+            size_var_id = it->second;
+          } else {
+            // It's always a vec4, with number of levels in fourth component
+            const ShaderType *var_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
+            size_var_id = module.define_variable(var_type, spv::StorageClassUniformConstant);
+            _size_var_ids.insert({chain, size_var_id});
+          }
+
+          // Copy what we need before inserting anything.
+          spv::Op query_opcode = op.opcode;
+          uint32_t result_id = op.args[1];
+          uint32_t result_type_id = op.args[0];
+
+          SpirVBuilder builder(module, function.id, i);
+          uint32_t temp = builder.op_load(size_var_id);
+
+          // Grab the components we need out of the vec4 size variable.
+          if (query_opcode == spv::OpImageQueryLevels) {
+            temp = builder.op_composite_extract(temp, {3});
+          }
+          else {
+            const ShaderType *result_type = module.resolve_type(result_type_id);
+            if (result_type->as_scalar() != nullptr) {
+              temp = builder.op_composite_extract(temp, {0});
+            }
+            else if (const ShaderType::Vector *vector = result_type->as_vector()) {
+              pvector<uint32_t> components;
+              for (size_t ci = 0; ci < vector->get_num_components(); ++ci) {
+                components.push_back(ci);
+              }
+              temp = builder.op_vector_shuffle(temp, temp, components);
+            }
+            else {
+              nassertd(false) break;
+            }
+          }
+
+          builder.push_id(result_id);
+          builder.op_convert(ShaderType::ST_int, temp);
+
+          // Remove the original instruction, which follows the insertions.
+          size_t pos = builder.get_insertion_index();
+          function.instructions.erase(function.instructions.begin() + pos);
+          i = pos - 1;
+        }
+        break;
+
+      default:
+        break;
       }
-
-      push_id(op.args[1]);
-      op_convert(ShaderType::ST_int, temp);
-      return false;
     }
-    // fall through
-
-  default:
-    return SpirVTransformPass::transform_function_op(op);
   }
-
-  return true;
 }

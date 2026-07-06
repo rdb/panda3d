@@ -77,6 +77,8 @@ clear() {
   _members.clear();
   _parameters.clear();
   _flags = 0;
+  _storage_class = spv::StorageClassMax;
+  _image_format = spv::ImageFormatUnknown;
 }
 
 /**
@@ -241,29 +243,31 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
     break;
 
   case spv::OpTypeVoid:
-    record_type(args[0], nullptr);
+    record_type(args[0], nullptr, true);
     break;
 
   case spv::OpTypeBool:
-    record_type(args[0], ShaderType::BOOL);
+    record_type(args[0], ShaderType::BOOL, (nargs == 1));
     break;
 
   case spv::OpTypeInt:
     {
+      // Record ints with a different width or extra operands as non-canonical.
       if (args[2]) {
-        record_type(args[0], ShaderType::INT);
+        record_type(args[0], ShaderType::INT, (nargs == 3 && args[1] == 32));
       } else {
-        record_type(args[0], ShaderType::UINT);
+        record_type(args[0], ShaderType::UINT, (nargs == 3 && args[1] == 32));
       }
     }
     break;
 
   case spv::OpTypeFloat:
     {
+      // Record float with extra operands as non-canonical.
       if (nargs >= 2 && args[1] >= 64) {
-        record_type(args[0], ShaderType::DOUBLE);
+        record_type(args[0], ShaderType::DOUBLE, (nargs == 2 && args[1] == 64));
       } else {
-        record_type(args[0], ShaderType::FLOAT);
+        record_type(args[0], ShaderType::FLOAT, (nargs == 2 && args[1] == 32));
       }
     }
     break;
@@ -273,8 +277,11 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
       const ShaderType::Scalar *element_type;
       DCAST_INTO_V(element_type, _defs[args[1]]._type);
       uint32_t component_count = args[2];
+      // Canonical only if the component type is itself the canonical
+      // declaration for its ShaderType (eg. not a 16-bit float).
       record_type(args[0], ShaderType::register_type(
-        ShaderType::Vector(element_type->get_scalar_type(), component_count)));
+        ShaderType::Vector(element_type->get_scalar_type(), component_count)),
+        is_canonical_type(args[1]));
       _defs[args[0]]._type_id = args[1];
     }
     break;
@@ -287,7 +294,8 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
       DCAST_INTO_V(row_type, _defs[args[1]]._type);
       uint32_t num_rows = args[2];
       record_type(args[0], ShaderType::register_type(
-        ShaderType::Matrix(row_type->get_scalar_type(), num_rows, row_type->get_num_components())));
+        ShaderType::Matrix(row_type->get_scalar_type(), num_rows, row_type->get_num_components())),
+        is_canonical_type(args[1]));
       _defs[args[0]]._type_id = args[1];
     }
     break;
@@ -392,14 +400,32 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
         access = (access & ShaderType::Access::WRITE_ONLY);
       }
 
+      // If it has the same properties as we'd give it if we used define_type,
+      // we record it in the type map.
+      bool canonical = (args[3] == 2 && args[5] == 0 && args[6] == 2 && args[7] == spv::ImageFormatUnknown && nargs <= 9);
+
+      const ShaderType *type = ShaderType::register_type(
+        ShaderType::Image(texture_type, sampled_type->get_scalar_type(), access));
+      record_type(args[0], type, canonical);
+
       // We don't record the "depth" flag on the image type (because no shader
       // language actually does that), so we have to store it somewhere else.
+      if (args[3] == 0) {
+        def._flags |= DF_non_depth_image;
+      }
       if (args[3] == 1) {
         def._flags |= DF_depth_image;
       }
-
-      record_type(args[0], ShaderType::register_type(
-        ShaderType::Image(texture_type, sampled_type->get_scalar_type(), access)));
+      if (args[5] != 0) {
+        def._flags |= DF_multisampled_image;
+      }
+      if (args[6] == 1) {
+        def._flags |= DF_sampled_image;
+      }
+      if (args[6] == 2) {
+        def._flags |= DF_storage_image;
+      }
+      def._image_format = (spv::ImageFormat)args[7];
     }
     break;
 
@@ -410,9 +436,20 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
 
   case spv::OpTypeSampledImage:
     if (const ShaderType::Image *image = _defs[args[1]]._type->as_image()) {
-      bool shadow = (_defs[args[1]]._flags & DF_depth_image) != 0;
+      const Definition &image_def = _defs[args[1]];
+      bool shadow = (image_def._flags & DF_depth_image) != 0;
+
+      // Only canonical if the image is declared exactly the way define_type()
+      // would declare it for this sampled image type.
+      bool canonical = (image_def._flags & DF_sampled_image) != 0 &&
+                       (image_def._flags & DF_multisampled_image) == 0 &&
+                       (shadow || (image_def._flags & DF_non_depth_image) != 0) &&
+                       image_def._image_format == spv::ImageFormatUnknown;
+
       record_type(args[0], ShaderType::register_type(
-        ShaderType::SampledImage(image->get_texture_type(), image->get_sampled_type(), shadow)));
+        ShaderType::SampledImage(image->get_texture_type(), image->get_sampled_type(), shadow)),
+        canonical);
+      _defs[args[0]]._type_id = args[1];
     } else {
       shader_cat.error()
         << "OpTypeSampledImage must refer to an image type!\n";
@@ -422,23 +459,29 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
 
   case spv::OpTypeArray:
     {
-      if (_defs[args[1]]._type != nullptr) {
+      uint32_t elem_type_id = args[1];
+      const ShaderType *elem_type = _defs[elem_type_id]._type;
+      if (elem_type != nullptr) {
         uint32_t array_stride = get_definition(args[0])._array_stride;
         record_type(args[0], ShaderType::register_type(
-          ShaderType::Array(_defs[args[1]]._type, _defs[args[2]]._constant, array_stride)));
+          ShaderType::Array(elem_type, _defs[args[2]]._constant, array_stride)),
+          is_canonical_type(elem_type_id));
       }
-      modify_definition(args[0])._type_id = args[1];
+      modify_definition(args[0])._type_id = elem_type_id;
     }
     break;
 
   case spv::OpTypeRuntimeArray:
     {
-      if (_defs[args[1]]._type != nullptr) {
+      uint32_t elem_type_id = args[1];
+      const ShaderType *elem_type = _defs[elem_type_id]._type;
+      if (elem_type != nullptr) {
         uint32_t array_stride = get_definition(args[0])._array_stride;
         record_type(args[0], ShaderType::register_type(
-          ShaderType::Array(_defs[args[1]]._type, 0, array_stride)));
+          ShaderType::Array(elem_type, 0, array_stride)),
+          is_canonical_type(elem_type_id));
       }
-      modify_definition(args[0])._type_id = args[1];
+      modify_definition(args[0])._type_id = elem_type_id;
     }
     break;
 
@@ -447,6 +490,7 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
       Definition &struct_def = modify_definition(args[0]);
       int access_flags = DF_non_writable | DF_non_readable;
       ShaderType::Struct type;
+      bool canonical = true;
       for (size_t i = 0; i < nargs - 1; ++i) {
         uint32_t member_type_id = args[i + 1];
         if (member_type_id >= _defs.size() || !_defs[member_type_id].is_type()) {
@@ -463,6 +507,10 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
           continue;
         }
 
+        // Only canonical if every member type is itself the canonical
+        // declaration for its ShaderType (eg. not a 16-bit float).
+        canonical = canonical && is_canonical_type(member_type_id);
+
         const ShaderType *member_type = get_member_type(member_def);
         if (member_def._offset >= 0) {
           type.add_member(member_type, member_def._name, (uint32_t)member_def._offset);
@@ -473,7 +521,7 @@ parse_instruction(spv::Op opcode, const uint32_t *args, uint32_t nargs, uint32_t
         // If any member is writable, the struct shan't be marked readonly.
         access_flags &= member_def._flags;
       }
-      record_type(args[0], ShaderType::register_type(std::move(type)));
+      record_type(args[0], ShaderType::register_type(std::move(type)), canonical);
 
       // If all struct members are flagged readonly/writeonly, we tag the type
       // so as well, since glslang doesn't decorate an SSBO in its entirety as
@@ -1036,12 +1084,87 @@ find_pointer_type(uint32_t type_id, spv::StorageClass storage_class) {
 }
 
 /**
- * Searches for an already-defined function type returning void and having no
+ * Searches for an already-recorded function type returning void and having no
  * function arguments and returns its id, or 0 if not found.
+ *
+ * Like find_pointer_type, this scans the recorded definitions, which during a
+ * transformation pass still include ids that have been deleted or replaced;
+ * the caller must chase those (see define_function_type).
  */
 uint32_t SpirVResultDatabase::
 find_function_type() {
-  return _void_function_type_id;
+  for (uint32_t id = 0; id < _defs.size(); ++id) {
+    const Definition &def = _defs[id];
+    if (def._dtype == DT_function_type && def._type == nullptr &&
+        def._parameters.empty()) {
+      return id;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Returns true for type-declaring opcodes whose declarations SPIR-V forbids
+ * a module from containing twice with identical operands.  The finalization
+ * sweep run by the SpirVTransformer merges duplicate declarations of these
+ * types.  Aggregate types (structs and arrays) are excluded, since SPIR-V
+ * explicitly permits duplicating those and their duplication is meaningful
+ * (eg. two structs with identical members may carry different decorations).
+ *
+ * Function types are also required to be unique by SPIR-V, but are excluded
+ * here regardless: their operands may still change while a transformation
+ * pass runs (parameters can be deleted), so the sweep handles them
+ * separately, comparing their final post-deletion operands.
+ */
+bool SpirVResultDatabase::
+is_unique_type_opcode(spv::Op opcode) {
+  switch (opcode) {
+  case spv::OpTypeVoid:
+  case spv::OpTypeBool:
+  case spv::OpTypeInt:
+  case spv::OpTypeFloat:
+  case spv::OpTypeVector:
+  case spv::OpTypeMatrix:
+  case spv::OpTypeImage:
+  case spv::OpTypeSampler:
+  case spv::OpTypeSampledImage:
+  case spv::OpTypePointer:
+  // Cooperative matrix types are parameterized non-aggregate types as well.
+  case spv::OpTypeCooperativeMatrixKHR:
+  case spv::OpTypeCooperativeMatrixNV:
+    return true;
+  default:
+    // Note that some rarely-used non-aggregate types (such as the pipe and
+    // event types) are also required to be unique, but those are not
+    // supported by the deduplication mechanism.
+    return false;
+  }
+}
+
+/**
+ * Removes the given id from the type lookup map, so that it can no longer be
+ * returned by find_type.  Called when the declaration of this id is removed
+ * from the module entirely, ie. when it has been deleted or replaced; the
+ * lookup would otherwise hand out an id that has no declaration, causing a
+ * new declaration to be written under an id that is considered dead.  (The
+ * find_xyz lookups that scan the recorded definitions instead, such as
+ * find_pointer_type and find_function_type, put the burden of chasing dead
+ * ids on the caller.)
+ *
+ * Note that this is a linear scan over the map, which is fine at
+ * shader-module scale; if it ever shows up in a profile, maintain a reverse
+ * index from id to key instead.
+ */
+void SpirVResultDatabase::
+forget_type(uint32_t id) {
+  TypeMap::iterator it = _type_map.begin();
+  while (it != _type_map.end()) {
+    if (it->second == id) {
+      it = _type_map.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 /**
@@ -1062,10 +1185,13 @@ find_null_constant(uint32_t type_id) {
 }
 
 /**
- * Records that the given type has been defined.
+ * Records that the given type has been defined.  The canonical flag reflects
+ * the fact that there may be multiple ways to record the type (eg. with
+ * different extra operands), it is set true if the type is defined in the
+ * same way as we would get with define_type().
  */
 void SpirVResultDatabase::
-record_type(uint32_t id, const ShaderType *type) {
+record_type(uint32_t id, const ShaderType *type, bool canonical) {
   Definition &def = modify_definition(id);
   def._dtype = DT_type;
   def._type = type;
@@ -1073,14 +1199,15 @@ record_type(uint32_t id, const ShaderType *type) {
   if (shader_cat.is_spam()) {
     if (type != nullptr) {
       shader_cat.spam()
-        << "Defined type " << id << ": " << *type << "\n";
+        << "Defined type " << id << ": " << *type
+        << (canonical ? "" : " (uncanonical)") << "\n";
     } else {
       shader_cat.spam()
         << "Defined type " << id << ": void\n";
     }
   }
 
-  if (!def.has_builtin()) {
+  if (canonical && !def.has_builtin()) {
     // Only put types we can fully round-trip in the type map.
     _type_map[type] = id;
   }
@@ -1153,11 +1280,10 @@ record_function_type(uint32_t id, uint32_t return_type_id, const uint32_t *param
   def._type = return_type;
   def._type_id = return_type_id;
 
+  // Clear first, so that re-recording a function type is idempotent.
+  def._parameters.clear();
   for (size_t i = 0; i < nparams; ++i) {
     def._parameters.push_back(params[i]);
-  }
-  if (return_type == nullptr && def._parameters.empty()) {
-    _void_function_type_id = id;
   }
 }
 
@@ -1395,6 +1521,7 @@ set_origin(uint32_t id, uint32_t other) {
  */
 void SpirVResultDatabase::
 mark_used(uint32_t id) {
+  nassertv(id < _defs.size());
   nassertv(!_defs[id].is_type());
 
   uint32_t origin_id = _defs[id]._origin_id;

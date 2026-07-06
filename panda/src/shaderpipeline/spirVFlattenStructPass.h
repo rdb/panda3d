@@ -24,14 +24,14 @@ class EXPCL_PANDA_SHADERPIPELINE SpirVFlattenStructPass final : public SpirVTran
 public:
   SpirVFlattenStructPass(uint32_t type_id);
 
-  virtual void preprocess();
-
-  virtual bool transform_definition_op(Instruction op);
-  virtual bool transform_function_op(Instruction op);
+  virtual void run(SpirVModule &module) override;
 
 private:
   const uint32_t _type_id;
   const ShaderType::Struct *_struct_type = nullptr;
+
+  // The ids of the deleted struct variables and access chains thereinto.
+  pset<uint32_t> _deleted;
 
   // Maps access chains accessing struct members to the created variable IDs
   // for that struct member.

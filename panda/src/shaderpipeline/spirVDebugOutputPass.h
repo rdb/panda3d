@@ -29,13 +29,11 @@ public:
   SpirVDebugOutputPass(Shader::Stage stage, Shader::DebugInfo &debug_info,
                        uint32_t buffer_binding, uint32_t buffer_set);
 
-  virtual bool transform_debug_op(Instruction op);
-  virtual bool transform_definition_op(Instruction op);
-  virtual bool transform_function_op(Instruction op);
+  virtual void run(SpirVModule &module) override;
 
 private:
-  void emit_printf(const std::string &fmt_string, const uint32_t *args, uint32_t nargs);
-  void emit_assert(const std::string &expression);
+  void emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t *args, uint32_t nargs);
+  void emit_assert(SpirVBuilder &builder, const std::string &expression);
 
   void define_buffer_block();
   static const ShaderType *make_buffer_block_type();
@@ -56,6 +54,8 @@ private:
   uint32_t _buffer_block_var_id = 0u;
 
   Shader::DebugInfo &_debug_info;
+
+  SpirVModule *_module = nullptr;
 
   pvector<uint32_t> _numbers;
   pmap<uint32_t, ExtInstImport> _ext_inst_imports;
