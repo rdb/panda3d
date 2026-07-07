@@ -12,6 +12,7 @@
  */
 
 #include "spirVInjectAlphaTestPass.h"
+#include "spirVInstructionCursor.h"
 
 /**
  *
@@ -70,20 +71,19 @@ run(SpirVModule &module) {
 
     // There may be multiple returns.  Insert an alpha test before every
     // return statement.
-    for (size_t i = 0; i < function->instructions.size(); ++i) {
-      spv::Op ret_opcode = function->instructions[i].opcode;
+    SpirVInstructionCursor cursor(module, *function);
+    while (cursor.next()) {
+      spv::Op ret_opcode = cursor->opcode;
       if (ret_opcode != spv::OpReturn && ret_opcode != spv::OpReturnValue) {
         continue;
       }
 
-      SpirVBuilder builder(module, function->id, i);
-
       if (_mode == M_never) {
         // Replace the OpReturn with an OpKill.
-        builder.op_kill();
-        function->instructions.erase(
-          function->instructions.begin() + builder.get_insertion_index());
-        i = builder.get_insertion_index() - 1;
+        cursor.replace([](SpirVBuilder &builder) -> uint32_t {
+          builder.op_kill();
+          return 0u;
+        });
         continue;
       }
 
@@ -100,18 +100,19 @@ run(SpirVModule &module) {
           }
         }
       }
-      uint32_t alpha = builder.op_load(builder.op_access_chain(var_id, {module.define_int_constant(3)}));
-      uint32_t ref = _spec_constant ? _alpha_ref_var_id : builder.op_load(_alpha_ref_var_id);
 
-      uint32_t cond = builder.op_compare(opcode, alpha, ref);
-      _compare_op_ids.push_back(cond);
+      cursor.insert_before([&](SpirVBuilder &builder) {
+        uint32_t alpha = builder.op_load(builder.op_access_chain(var_id, {module.define_int_constant(3)}));
+        uint32_t ref = _spec_constant ? _alpha_ref_var_id : builder.op_load(_alpha_ref_var_id);
 
-      uint32_t branch = builder.branch_if(cond);
-        builder.op_kill();
-      builder.branch_endif(branch);
+        uint32_t cond = builder.op_compare(opcode, alpha, ref);
+        _compare_op_ids.push_back(cond);
 
-      // Continue past the original return, which follows the injected code.
-      i = builder.get_insertion_index();
+        uint32_t branch = builder.branch_if(cond);
+          builder.op_kill();
+        builder.branch_endif(branch);
+      });
+      // The cursor is back on the original return; next() continues past it.
     }
   }
 }

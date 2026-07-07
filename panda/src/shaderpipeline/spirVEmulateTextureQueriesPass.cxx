@@ -12,6 +12,7 @@
  */
 
 #include "spirVEmulateTextureQueriesPass.h"
+#include "spirVInstructionCursor.h"
 #include "spirVUsageAnalysis.h"
 
 /**
@@ -60,8 +61,9 @@ run(SpirVModule &module) {
   }
 
   for (Function &function : module.modify_functions()) {
-    for (size_t i = 0; i < function.instructions.size(); ++i) {
-      Instruction &op = function.instructions[i];
+    SpirVInstructionCursor cursor(module, function);
+    while (cursor.next()) {
+      Instruction &op = *cursor;
       switch (op.opcode) {
       case spv::OpAccessChain:
       case spv::OpInBoundsAccessChain:
@@ -125,20 +127,15 @@ run(SpirVModule &module) {
           // reference.
           Instruction orig = op;
 
-          SpirVBuilder builder(module, function.id, i);
-          uint32_t sample = builder.op_image_sample(
-            orig.args[2], orig.args[3],
-            orig.args.size() >= 6 ? orig.args[5] : 0u,
-            orig.args.size() > 6 ? orig.args.data() + 6 : nullptr);
-          uint32_t depth = builder.op_composite_extract(sample, {0});
-          uint32_t cmp = builder.op_compare(spv::OpFOrdGreaterThan, depth, orig.args[4]);
-          builder.push_id(orig.args[1]);
-          builder.op_select(cmp, _float_one_id, _float_zero_id);
-
-          // Remove the original instruction, which follows the insertions.
-          size_t pos = builder.get_insertion_index();
-          function.instructions.erase(function.instructions.begin() + pos);
-          i = pos - 1;
+          cursor.replace([&](SpirVBuilder &builder) -> uint32_t {
+            uint32_t sample = builder.op_image_sample(
+              orig.args[2], orig.args[3],
+              orig.args.size() >= 6 ? orig.args[5] : 0u,
+              orig.args.size() > 6 ? orig.args.data() + 6 : nullptr);
+            uint32_t depth = builder.op_composite_extract(sample, {0});
+            uint32_t cmp = builder.op_compare(spv::OpFOrdGreaterThan, depth, orig.args[4]);
+            return builder.op_select(cmp, _float_one_id, _float_zero_id);
+          });
         }
         break;
 
@@ -182,40 +179,36 @@ run(SpirVModule &module) {
 
           // Copy what we need before inserting anything.
           spv::Op query_opcode = op.opcode;
-          uint32_t result_id = op.args[1];
           uint32_t result_type_id = op.args[0];
 
-          SpirVBuilder builder(module, function.id, i);
-          uint32_t temp = builder.op_load(size_var_id);
-
-          // Grab the components we need out of the vec4 size variable.
-          if (query_opcode == spv::OpImageQueryLevels) {
-            temp = builder.op_composite_extract(temp, {3});
+          const ShaderType *result_type = module.resolve_type(result_type_id);
+          if (query_opcode != spv::OpImageQueryLevels &&
+              result_type->as_scalar() == nullptr &&
+              result_type->as_vector() == nullptr) {
+            nassertd(false) break;
           }
-          else {
-            const ShaderType *result_type = module.resolve_type(result_type_id);
-            if (result_type->as_scalar() != nullptr) {
+
+          cursor.replace([&](SpirVBuilder &builder) -> uint32_t {
+            uint32_t temp = builder.op_load(size_var_id);
+
+            // Grab the components we need out of the vec4 size variable.
+            if (query_opcode == spv::OpImageQueryLevels) {
+              temp = builder.op_composite_extract(temp, {3});
+            }
+            else if (result_type->as_scalar() != nullptr) {
               temp = builder.op_composite_extract(temp, {0});
             }
-            else if (const ShaderType::Vector *vector = result_type->as_vector()) {
+            else {
+              const ShaderType::Vector *vector = result_type->as_vector();
               pvector<uint32_t> components;
               for (size_t ci = 0; ci < vector->get_num_components(); ++ci) {
                 components.push_back(ci);
               }
               temp = builder.op_vector_shuffle(temp, temp, components);
             }
-            else {
-              nassertd(false) break;
-            }
-          }
 
-          builder.push_id(result_id);
-          builder.op_convert(ShaderType::ST_int, temp);
-
-          // Remove the original instruction, which follows the insertions.
-          size_t pos = builder.get_insertion_index();
-          function.instructions.erase(function.instructions.begin() + pos);
-          i = pos - 1;
+            return builder.op_convert(ShaderType::ST_int, temp);
+          });
         }
         break;
 

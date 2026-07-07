@@ -485,3 +485,28 @@ TEST_CASE("SpirVModule round-trips a module through parse and emit", "[shaderpip
   CHECK(reparsed.resolve_value_type(id_in) == vec4_type);
   CHECK(reparsed.get_storage_class(id_in) == spv::StorageClassInput);
 }
+
+TEST_CASE("SpirVBuilder branch_endif terminates a fall-through block", "[shaderpipeline]") {
+  // main() { if (true) { b = a; } }
+  SpirVModule module = make_module();
+  uint32_t var_a = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
+  uint32_t var_b = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
+  uint32_t main_id = add_main(module);
+  uint32_t merge;
+  {
+    SpirVBuilder builder = builder_before_return(module, main_id);
+    uint32_t cond = module.define_constant(ShaderType::BOOL, 1);
+    merge = builder.branch_if(cond);
+    builder.op_store(var_b, builder.op_load(var_a));
+    builder.branch_endif(merge);
+  }
+
+  InstructionStream stream = module.emit();
+  CHECK(stream.validate());
+
+  // The store does not terminate the true block, so branch_endif must have
+  // inserted the branch to the merge block itself.
+  REQUIRE(count_op(stream, spv::OpBranch) == 1);
+  Instruction branch = find_op(stream, spv::OpBranch);
+  CHECK(branch.args[0] == merge);
+}

@@ -12,6 +12,7 @@
  */
 
 #include "spirVMakeBlockPass.h"
+#include "spirVInstructionCursor.h"
 
 /**
  *
@@ -58,31 +59,31 @@ run(SpirVModule &module) {
 
   // Rewrite all accesses to the old variables into accesses to the block.
   for (Function &function : module.modify_functions()) {
-    for (size_t i = 0; i < function.instructions.size(); ++i) {
-      SpirVBuilder builder(module, function.id, i);
-
+    SpirVInstructionCursor cursor(module, function);
+    while (cursor.next()) {
       // Replaces the given operand of the instruction being visited with a
       // freshly inserted access chain, if it refers to one of the old
-      // variables.  Note that the insertion shifts the instruction itself
-      // past the builder's cursor.
+      // variables.
       auto replace_arg = [&](size_t arg_index) {
-        Instruction &op = function.instructions[builder.get_insertion_index()];
-        if (arg_index >= op.args.size()) {
+        if (arg_index >= cursor->args.size()) {
           return;
         }
-        auto it = _member_indices.find(op.args[arg_index]);
+        auto it = _member_indices.find(cursor->args[arg_index]);
         if (it != _member_indices.end()) {
           uint32_t constant_id = module.define_int_constant(it->second);
-          uint32_t chain_id = builder.op_access_chain(_block_var_id, {constant_id});
-          function.instructions[builder.get_insertion_index()].args[arg_index] = chain_id;
+          uint32_t chain_id = 0;
+          cursor.insert_before([&](SpirVBuilder &builder) {
+            chain_id = builder.op_access_chain(_block_var_id, {constant_id});
+          });
+          cursor->args[arg_index] = chain_id;
         }
       };
 
-      switch (function.instructions[i].opcode) {
+      switch (cursor->opcode) {
       case spv::OpAccessChain:
       case spv::OpInBoundsAccessChain:
         {
-          Instruction &op = function.instructions[i];
+          Instruction &op = *cursor;
           if (op.args.size() >= 3 && _member_indices.count(op.args[2])) {
             uint32_t member_index = _member_indices[op.args[2]];
             uint32_t constant_id = module.define_int_constant(member_index);
@@ -102,7 +103,7 @@ run(SpirVModule &module) {
 
       case spv::OpFunctionCall:
         // Add access chains when passing a load of a member id to a function.
-        for (size_t ai = 3; ai < function.instructions[builder.get_insertion_index()].args.size(); ++ai) {
+        for (size_t ai = 3; ai < cursor->args.size(); ++ai) {
           replace_arg(ai);
         }
         break;
@@ -159,9 +160,6 @@ run(SpirVModule &module) {
       default:
         break;
       }
-
-      // Skip past whatever the builder inserted before this instruction.
-      i = builder.get_insertion_index();
     }
   }
 

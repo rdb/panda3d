@@ -14,6 +14,61 @@
 #include "spirVBuilder.h"
 #include "pbitops.h"
 
+#ifndef NDEBUG
+/**
+ * Returns the scalar type of a scalar, vector or matrix ShaderType, or
+ * ST_unknown.  Used by the float-only assertions below.
+ */
+static ShaderType::ScalarType
+get_element_scalar_type(const ShaderType *type) {
+  if (type != nullptr) {
+    if (const ShaderType::Scalar *scalar = type->as_scalar()) {
+      return scalar->get_scalar_type();
+    }
+    if (const ShaderType::Vector *vector = type->as_vector()) {
+      return vector->get_scalar_type();
+    }
+    if (const ShaderType::Matrix *matrix = type->as_matrix()) {
+      return matrix->get_scalar_type();
+    }
+  }
+  return ShaderType::ST_unknown;
+}
+
+/**
+ * Returns true if the given scalar type is a floating-point type.
+ */
+static bool
+is_float_scalar_type(ShaderType::ScalarType scalar_type) {
+  return scalar_type == ShaderType::ST_float ||
+         scalar_type == ShaderType::ST_double;
+}
+#endif  // NDEBUG
+
+/**
+ * Returns true if the given opcode terminates a block, so that no further
+ * instruction may follow it before the next OpLabel.
+ */
+static bool
+is_block_terminator(spv::Op opcode) {
+  switch (opcode) {
+  case spv::OpBranch:
+  case spv::OpBranchConditional:
+  case spv::OpSwitch:
+  case spv::OpReturn:
+  case spv::OpReturnValue:
+  case spv::OpKill:
+  case spv::OpUnreachable:
+  case spv::OpTerminateInvocation:
+  case spv::OpIgnoreIntersectionKHR:
+  case spv::OpTerminateRayKHR:
+  case spv::OpEmitMeshTasksEXT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 /**
  * Creates a builder without a cursor position; global definitions may be
  * created, and op_function may be called to start a new function.
@@ -264,16 +319,12 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
   nassertr(value_type != nullptr, 0u);
 
   const ShaderType *new_type = nullptr;
-  uint32_t new_type_id = 0;
   ShaderType::ScalarType old_scalar_type = ShaderType::ST_float;
 
   if (const ShaderType::Scalar *scalar = value_type->as_scalar()) {
     old_scalar_type = scalar->get_scalar_type();
     if (old_scalar_type == new_scalar_type) {
-      // No conversion needed.  An id pushed for the conversion result would
-      // silently transfer to the next unrelated allocation, so pushing one
-      // before a conversion that turns out to be a no-op is an error.
-      nassertr(_next_id == 0, value);
+      // No conversion needed.
       return value;
     }
     new_type = ShaderType::register_type(ShaderType::Scalar(new_scalar_type));
@@ -281,8 +332,7 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
   else if (const ShaderType::Vector *vector = value_type->as_vector()) {
     old_scalar_type = vector->get_scalar_type();
     if (old_scalar_type == new_scalar_type) {
-      // See above.
-      nassertr(_next_id == 0, value);
+      // No conversion needed.
       return value;
     }
     new_type = ShaderType::register_type(ShaderType::Vector(new_scalar_type, vector->get_num_components()));
@@ -295,8 +345,6 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
                 || old_scalar_type == ShaderType::ST_double;
   bool new_float = new_scalar_type == ShaderType::ST_float
                 || new_scalar_type == ShaderType::ST_double;
-
-  uint32_t id = allocate_id();
 
   if (old_scalar_type == ShaderType::ST_bool && new_scalar_type != ShaderType::ST_bool) {
     uint32_t true_value, false_value;
@@ -312,18 +360,16 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
       true_value = op_composite_construct(new_type, pvector<uint32_t>(vector->get_num_components(), true_value));
       false_value = op_composite_construct(new_type, pvector<uint32_t>(vector->get_num_components(), false_value));
     }
-    push_id(id);
     return op_select(value, true_value, false_value);
   }
 
   if (new_scalar_type == ShaderType::ST_bool && old_scalar_type != ShaderType::ST_bool) {
     // Conversion to bool is the same as != 0
     uint32_t null_value = define_null_constant(value_type);
-    push_id(id);
     return op_compare(old_float ? spv::OpFUnordNotEqual : spv::OpINotEqual, value, null_value);
   }
 
-  new_type_id = _module.define_type(new_type);
+  uint32_t new_type_id = _module.define_type(new_type);
 
   // Determine which conversion instruction to use.
   spv::Op opcode;
@@ -344,6 +390,7 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
     opcode = spv::OpBitcast;
   }
 
+  uint32_t id = allocate_id();
   insert(opcode, {new_type_id, id, value});
   return id;
 }
@@ -478,13 +525,18 @@ op_sub(uint32_t left, uint32_t right) {
 }
 
 /**
- * Inserts a scalar division instruction.
+ * Inserts a scalar division instruction.  Floating-point only, for now; see
+ * op_convert for producing a float operand.
  */
 uint32_t SpirVBuilder::
 op_div(uint32_t left, uint32_t right) {
   nassertr(left != 0u, 0u);
   nassertr(right != 0u, 0u);
-  nassertr(_module.resolve_value_type(left) == _module.resolve_value_type(right), 0);
+#ifndef NDEBUG
+  const ShaderType *left_type = _module.resolve_value_type(left);
+  nassertr(left_type == _module.resolve_value_type(right), 0);
+  nassertr(is_float_scalar_type(get_element_scalar_type(left_type)), 0);
+#endif
 
   uint32_t id = allocate_id();
   insert(spv::OpFDiv, {_module.get_type_id(left), id, left, right});
@@ -502,24 +554,26 @@ op_dot(uint32_t left, uint32_t right) {
   nassertr(left_type != nullptr, 0u);
   nassertr(left_type == _module.resolve_value_type(right), 0u);
 
-  uint32_t id = allocate_id();
-
   const ShaderType::Vector *vector = left_type->as_vector();
   nassertr(vector != nullptr, 0u);
+  nassertr(is_float_scalar_type(vector->get_scalar_type()), 0u);
 
   const ShaderType *type = ShaderType::register_type(ShaderType::Scalar(vector->get_scalar_type()));
   uint32_t type_id = _module.define_type(type);
 
+  uint32_t id = allocate_id();
   insert(spv::OpDot, {type_id, id, left, right});
   return id;
 }
 
 /**
- * Inserts a negation instruction.
+ * Inserts a negation instruction.  Floating-point only, for now.
  */
 uint32_t SpirVBuilder::
 op_negate(uint32_t value) {
   nassertr(value != 0u, 0u);
+  nassertr(is_float_scalar_type(get_element_scalar_type(
+    _module.resolve_value_type(value))), 0u);
 
   uint32_t id = allocate_id();
   insert(spv::OpFNegate, {_module.get_type_id(value), id, value});
@@ -546,6 +600,8 @@ op_multiply(uint32_t left, uint32_t right) {
   if (const ShaderType::Scalar *lscalar = left_type->as_scalar()) {
     if (const ShaderType::Scalar *rscalar = right_type->as_scalar()) {
       nassertr(lscalar == rscalar, 0);
+      // Floating-point only, for now.
+      nassertr(is_float_scalar_type(lscalar->get_scalar_type()), 0);
       opcode = spv::OpFMul;
       type_id = _module.get_type_id(left);
     }
@@ -744,10 +800,6 @@ op_function_end() {
  */
 uint32_t SpirVBuilder::
 branch_if(uint32_t cond) {
-  // This helper allocates two label ids, so it cannot honor a pending
-  // push_id (there is no way to tell which allocation it was meant for).
-  nassertr(_next_id == 0, 0);
-
   uint32_t true_label = allocate_id();
   uint32_t false_label = allocate_id();
 
@@ -762,5 +814,23 @@ branch_if(uint32_t cond) {
  */
 void SpirVBuilder::
 branch_endif(uint32_t false_label) {
+  // The block being ended must not fall through into the merge label; if the
+  // code inserted since branch_if did not end with its own terminator (such
+  // as the OpKill of the alpha test), branch to the merge block explicitly.
+  Function *function = get_current_function();
+  nassertv(function != nullptr);
+
+  spv::Op prev_opcode = spv::OpNop;
+  for (size_t i = _index; i > 0; --i) {
+    const Instruction &prev = function->instructions[i - 1];
+    if (!prev.is_nop()) {
+      prev_opcode = prev.opcode;
+      break;
+    }
+  }
+  if (!is_block_terminator(prev_opcode)) {
+    op_branch(false_label);
+  }
+
   insert(spv::OpLabel, {false_label});
 }

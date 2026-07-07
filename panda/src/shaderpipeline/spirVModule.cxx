@@ -315,7 +315,19 @@ parse(const uint32_t *words, size_t num_words) {
     uint32_t nargs = wcount - 1;
     i += wcount;
 
-    if (nargs < get_min_operand_count(opcode)) {
+    // Every instruction with a result id (and result type) must at least
+    // carry those operands; this is what makes record_result and the various
+    // places that read op.args[0] of a type declaration safe without a
+    // per-opcode entry in the table below.
+    bool has_result, has_result_type;
+    spv::HasResultAndType(opcode, &has_result, &has_result_type);
+    uint32_t min_operands = (uint32_t)has_result + (uint32_t)has_result_type;
+    uint32_t table_min = get_min_operand_count(opcode);
+    if (table_min > min_operands) {
+      min_operands = table_min;
+    }
+
+    if (nargs < min_operands) {
       shader_cat.error()
         << "Truncated instruction (opcode " << (uint32_t)opcode << ", "
         << nargs << " operands) during SPIR-V parse\n";
@@ -606,10 +618,11 @@ emit_instruction(std::vector<uint32_t> &words, spv::Op opcode,
 
 /**
  * Appends a string literal (padded with at least one zero byte) to the given
- * argument vector.
+ * argument vector (a pvector or an instruction's Args).
  */
+template<class ArgsVector>
 static void
-pack_string(pvector<uint32_t> &args, const std::string &str) {
+pack_string(ArgsVector &args, const std::string &str) {
   size_t offset = args.size();
   args.resize(offset + str.size() / 4 + 1, 0u);
   memcpy((char *)(args.data() + offset), str.data(), str.size());

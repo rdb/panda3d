@@ -37,31 +37,11 @@ get_current_function_id() const {
 }
 
 /**
- * Allocates a fresh identifier, unless one was pushed with push_id().
+ * Allocates a fresh identifier.
  */
 INLINE uint32_t SpirVBuilder::
 allocate_id() {
-  uint32_t next_id = _next_id;
-  if (next_id != 0) {
-    _next_id = 0;
-    return next_id;
-  }
   return _module.allocate_id();
-}
-
-/**
- * Sets the id that should be returned by the next allocate_id() call.  Used
- * when replacing an instruction with a new sequence whose final result must
- * assume the replaced instruction's id.
- *
- * Only valid immediately before a call that allocates exactly one result id:
- * helpers that allocate several (such as branch_if) assert against a pending
- * id, as does an op_convert that turns out to require no conversion.
- */
-INLINE void SpirVBuilder::
-push_id(uint32_t id) {
-  nassertv(_next_id == 0);
-  _next_id = id;
 }
 
 /**

@@ -12,6 +12,7 @@
  */
 
 #include "spirVDebugOutputPass.h"
+#include "spirVInstructionCursor.h"
 
 /**
  *
@@ -76,41 +77,33 @@ run(SpirVModule &module) {
     _current_file = 0;
     _current_line = 0;
 
-    for (size_t i = 0; i < function.instructions.size(); ++i) {
-      Instruction &op = function.instructions[i];
+    SpirVInstructionCursor cursor(module, function);
+    while (cursor.next()) {
+      Instruction &op = *cursor;
 
       if (op.opcode == spv::OpExtInst && op.args.size() >= 4 &&
           get_ext_inst_import(op.args[2]) == EI_nonsemantic_debugprintf &&
           op.args[3] == 1 /*DebugPrintf*/) {
-
-        // Capture what we need; the print instruction is deleted below, and
-        // insertions invalidate the reference regardless.
-        uint32_t result_id = op.args[1];
 
 #ifndef NDEBUG
         std::string string = op.args.size() >= 5 ? module.resolve_string(op.args[4]) : std::string();
         if (!string.empty()) {
           pvector<uint32_t> fmt_args(op.args.data() + 5, op.args.data() + op.args.size());
 
-          SpirVBuilder builder(module, function.id, i);
-          if (string == "%!") {
-            // Special internal format string that issues an assertion.  The
-            // argument contains the expression.
-            emit_assert(builder, !fmt_args.empty() ? module.resolve_string(fmt_args[0]) : "");
-          } else {
-            emit_printf(builder, string, fmt_args.data(), (uint32_t)fmt_args.size());
-          }
-
-          // Delete the print instruction, which now follows the insertions.
-          // This tombstones it in place (and drops its id from the index);
-          // continue past it.
-          module.delete_id(result_id);
-          i = builder.get_insertion_index();
-          continue;
+          cursor.insert_before([&](SpirVBuilder &builder) {
+            if (string == "%!") {
+              // Special internal format string that issues an assertion.  The
+              // argument contains the expression.
+              emit_assert(builder, !fmt_args.empty() ? module.resolve_string(fmt_args[0]) : "");
+            } else {
+              emit_printf(builder, string, fmt_args.data(), (uint32_t)fmt_args.size());
+            }
+          });
         }
 #endif
-        // Just remove the print instruction.
-        module.delete_id(result_id);
+        // Remove the print instruction, which tombstones it in place and
+        // drops its id from the index.
+        cursor.remove();
         continue;
       }
       else if (op.opcode == spv::OpExtInst && op.args.size() >= 4 &&

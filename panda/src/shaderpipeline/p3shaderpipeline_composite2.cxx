@@ -6,6 +6,7 @@
 #include "spirVHoistStructResourcesPass.cxx"
 #include "spirVInjectAlphaTestPass.cxx"
 #include "spirVInjectVertexTransformPass.cxx"
+#include "spirVInstructionCursor.cxx"
 #include "spirVMakeBlockPass.cxx"
 #include "spirVModule.cxx"
 #include "spirVRemoveUnusedVariablesPass.cxx"

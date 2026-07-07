@@ -15,6 +15,7 @@
 #define SPIRVMODULE_H
 
 #include "shaderModuleSpirV.h"
+#include "small_vector.h"
 
 /**
  * A SPIR-V module, materialized into a mutable in-memory representation that
@@ -70,6 +71,11 @@ class EXPCL_PANDA_SHADERPIPELINE SpirVModule {
 public:
   using InstructionStream = ShaderModuleSpirV::InstructionStream;
 
+  // Operand storage.  The inline capacity of 4 keeps the most numerous
+  // instructions (binary arithmetic and comparisons, loads, stores,
+  // decorations) off the heap.
+  typedef small_vector<uint32_t, 4> Args;
+
   /**
    * A single instruction, owning its operands.  For instructions with a
    * result id and/or result type id, these are stored in args at the
@@ -100,7 +106,7 @@ public:
     std::string get_string(size_t arg_index, size_t *end_index = nullptr) const;
 
     spv::Op opcode = spv::OpNop;
-    pvector<uint32_t> args;
+    Args args;
   };
 
   /**
@@ -111,7 +117,7 @@ public:
    */
   struct Annotation {
     spv::Op opcode;
-    pvector<uint32_t> args;
+    Args args;
 
     INLINE bool is_member_annotation() const;
     INLINE spv::Decoration get_decoration() const;
@@ -366,6 +372,9 @@ private:
   INLINE IdEntry &modify_entry(uint32_t id);
   void record_result_at(const Instruction &op, uint32_t function_id, int32_t global_index);
   void clear_id_state(uint32_t id);
+
+  // For clear_id_state, when a replacement renumbers an inserted result.
+  friend class SpirVInstructionCursor;
 
   const ShaderType *r_resolve_type(uint32_t id) const;
   const ShaderType *apply_member_decorations(uint32_t type_id, uint32_t member_index, const ShaderType *type) const;

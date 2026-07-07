@@ -207,7 +207,7 @@ process_globals(SpirVModule &module) {
       // Erase deleted types in the function parameter list, and add
       // parameters for the variables hoisted out of structs passed in.
       if (op.args.size() >= 2) {
-        pvector<uint32_t> new_args({op.args[0], op.args[1]});
+        Args new_args({op.args[0], op.args[1]});
 
         for (size_t ai = 2; ai < op.args.size(); ++ai) {
           uint32_t arg = op.args[ai];
@@ -356,7 +356,7 @@ process_function(SpirVModule &module, Function &function) {
           // out which variable it's referring to.
           AccessChain access_chain(op.args[2]);
 
-          pvector<uint32_t> new_args({op.args[0], op.args[1], op.args[2]});
+          Args new_args({op.args[0], op.args[1], op.args[2]});
 
           for (size_t ai = 3; ai < op.args.size(); ++ai) {
             const Instruction *parent_decl = module.get_decl(parent_id);
@@ -396,8 +396,8 @@ process_function(SpirVModule &module, Function &function) {
           // type, so add additional access chains for the hoisted members.
           AccessChain access_chain(op.args[2]);
 
-          pvector<uint32_t> new_args({op.args[0], op.args[1], op.args[2]});
-          pvector<uint32_t> hoisted_new_args({0, 0, 0});
+          Args new_args({op.args[0], op.args[1], op.args[2]});
+          Args hoisted_new_args({0, 0, 0});
           bool deleted_member = false;
 
           for (size_t ai = 3; ai < op.args.size(); ++ai) {
@@ -484,7 +484,7 @@ process_function(SpirVModule &module, Function &function) {
 
     case spv::OpFunctionCall:
       if (op.args.size() >= 3) {
-        pvector<uint32_t> new_args({op.args[0], op.args[1], op.args[2]});
+        Args new_args({op.args[0], op.args[1], op.args[2]});
 
         for (size_t ai = 3; ai < op.args.size(); ++ai) {
           uint32_t arg = op.args[ai];

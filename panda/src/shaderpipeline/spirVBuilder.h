@@ -49,7 +49,6 @@ public:
   INLINE uint32_t get_current_function_id() const;
 
   INLINE uint32_t allocate_id();
-  INLINE void push_id(uint32_t id);
 
   // Inserts an arbitrary instruction at the cursor, recording its result (if
   // any) in the module's id index; use this for instructions that have no
@@ -109,8 +108,6 @@ private:
   size_t _function_index = (size_t)-1;
   size_t _index = 0;
   uint32_t _current_function_id = 0;
-
-  uint32_t _next_id = 0;
 };
 
 #include "spirVBuilder.I"

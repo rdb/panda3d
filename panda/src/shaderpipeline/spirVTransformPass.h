@@ -35,6 +35,7 @@ public:
   using Function = SpirVModule::Function;
   using EntryPoint = SpirVModule::EntryPoint;
   using IdKind = SpirVModule::IdKind;
+  using Args = SpirVModule::Args;
 
   virtual ~SpirVTransformPass() = default;
 
