@@ -55,6 +55,12 @@ public:
   ALWAYS_INLINE constexpr small_vector() = default;
   INLINE small_vector(TypeHandle type_handle);
   INLINE small_vector(std::initializer_list<T> init);
+#ifndef CPPPARSER
+  // Interrogate cannot parse an unnamed default template parameter.
+  template<class InputIterator,
+           class = typename std::iterator_traits<InputIterator>::iterator_category>
+  INLINE small_vector(InputIterator first, InputIterator last);
+#endif
   INLINE small_vector(const small_vector &copy);
   INLINE small_vector(small_vector &&from) noexcept;
   INLINE ~small_vector();
@@ -103,8 +109,20 @@ public:
   INLINE void push_back(const T &value);
   INLINE void push_back(T &&value);
   INLINE void pop_back();
+#ifndef CPPPARSER
+  // Interrogate cannot parse an unnamed default template parameter.
+  template<class InputIterator,
+           class = typename std::iterator_traits<InputIterator>::iterator_category>
+  INLINE void assign(InputIterator first, InputIterator last);
+#endif
   INLINE iterator insert(const_iterator pos, const T &value);
   INLINE iterator insert(const_iterator pos, T &&value);
+#ifndef CPPPARSER
+  // Interrogate cannot parse an unnamed default template parameter.
+  template<class InputIterator,
+           class = typename std::iterator_traits<InputIterator>::iterator_category>
+  INLINE iterator insert(const_iterator pos, InputIterator first, InputIterator last);
+#endif
   INLINE iterator erase(const_iterator pos);
   INLINE iterator erase(const_iterator begin, const_iterator end);
 

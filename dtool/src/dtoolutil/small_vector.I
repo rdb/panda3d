@@ -35,6 +35,23 @@ small_vector(std::initializer_list<T> init) :
   }
 }
 
+#ifndef CPPPARSER
+/**
+ * Constructor taking a range of elements to copy.
+ */
+template<class T, unsigned N>
+template<class InputIterator, class>
+INLINE small_vector<T, N>::
+small_vector(InputIterator first, InputIterator last) {
+  this->reserve((size_type)std::distance(first, last));
+  T *to = this->data();
+  for (; first != last; ++first) {
+    new (to + _size) T(*first);
+    ++_size;
+  }
+}
+#endif  // CPPPARSER
+
 /**
  * Copy constructor.
  */
@@ -508,6 +525,25 @@ pop_back() {
   (this->data() + --_size)->~T();
 }
 
+#ifndef CPPPARSER
+/**
+ * Replaces the contents of the vector with the given range of elements.
+ * Does not deallocate storage, consider calling shrink_to_fit afterwards.
+ */
+template<class T, unsigned N>
+template<class InputIterator, class>
+INLINE void small_vector<T, N>::
+assign(InputIterator first, InputIterator last) {
+  this->clear();
+  this->reserve((size_type)std::distance(first, last));
+  T *to = this->data();
+  for (; first != last; ++first) {
+    new (to + _size) T(*first);
+    ++_size;
+  }
+}
+#endif  // CPPPARSER
+
 /**
  * Inserts the given element before the indicated position.
  */
@@ -529,6 +565,27 @@ insert(const_iterator pos, T &&value) {
   new (new_pos) T(std::move(value));
   return new_pos;
 }
+
+#ifndef CPPPARSER
+/**
+ * Inserts the given range of elements before the indicated position.  The
+ * range may not point into this vector.
+ */
+template<class T, unsigned N>
+template<class InputIterator, class>
+INLINE typename small_vector<T, N>::iterator small_vector<T, N>::
+insert(const_iterator pos, InputIterator first, InputIterator last) {
+  size_type count = (size_type)std::distance(first, last);
+  if (count == 0) {
+    return (iterator)pos;
+  }
+  iterator new_pos = this->insert_gap(pos, count);
+  for (iterator it = new_pos; first != last; ++first) {
+    new (it++) T(*first);
+  }
+  return new_pos;
+}
+#endif  // CPPPARSER
 
 /**
  * Removes the element at the given position from the vector.  Usually does not
