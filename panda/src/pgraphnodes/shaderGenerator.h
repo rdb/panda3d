@@ -76,11 +76,6 @@ PUBLISHED:
   void clear_generated_shaders();
 
 protected:
-  // Shader register allocation:
-  int _ftregs_used;
-  void reset_register_allocator();
-  const char *alloc_freg();
-
   Filename _cache_filename;
   bool _use_pointcoord;
   bool _use_shadow_filter;
@@ -207,11 +202,62 @@ protected:
 
   static CPT(ShaderAttrib) make_attrib(const ShaderKey &key, Shader *shader);
 
-  static std::string combine_mode_as_string(const ShaderKey::TextureInfo &info,
-                      TextureStage::CombineMode c_mode, bool alpha, short texindex);
-  static std::string combine_source_as_string(const ShaderKey::TextureInfo &info,
-                                         short num, bool alpha, short texindex);
-  static const char *texture_type_as_string(Texture::TextureType ttype);
+  /**
+   * The interface between the generated vertex and fragment shaders: which
+   * intermediate results are calculated in the vertex shader and passed
+   * along, and at which locations the varyings live.  This is derived from
+   * the ShaderKey up front, so that the vertex and fragment modules can each
+   * be generated independently from just the key and the plan (in parallel,
+   * one day).
+   */
+  struct ShaderPlan {
+    bool _need_world_position = false;
+    bool _need_world_normal = false;
+    bool _need_eye_position = false;
+    bool _need_eye_normal = false;
+    bool _need_normal = false;
+    bool _need_tangents = false;
+    bool _need_point_size = false;
+    bool _need_point_coord = false;
+    bool _calc_point_coord = false;
+    bool _need_color = false;
+    bool _need_eye_reflection = false;
+    bool _need_fragment_view_to_world = false;
+    bool _have_specular = false;
+
+    int _map_index_glow = -1;
+    int _map_index_gloss = -1;
+    int _map_index_emission = -1;
+
+    // Names of the tangent and binormal vertex columns, without the "vtx_"
+    // prefix, if a tangent space is needed.
+    std::string _tangent_input;
+    std::string _binormal_input;
+
+    // Varying locations, or -1 if the varying is not passed.  The texcoord
+    // varyings are listed in the order in which the texture stages first
+    // reference them.
+    pvector<std::pair<const InternalName *, int> > _texcoord_locations;
+    pvector<int> _lightcoord_locations;
+    int _hpos_location = -1;
+    int _world_position_location = -1;
+    int _world_normal_location = -1;
+    int _eye_position_location = -1;
+    int _eye_normal_location = -1;
+    int _tangent_location = -1;
+    int _binormal_location = -1;
+    int _color_location = -1;
+    int _eyevec_location = -1;
+    int _pointcoord_location = -1;
+
+    int find_texcoord_location(const InternalName *name) const;
+  };
+
+  ShaderPlan make_plan(const ShaderKey &key) const;
+  PT(ShaderModule) generate_vertex_shader(const ShaderKey &key,
+                                          const ShaderPlan &plan) const;
+  PT(ShaderModule) generate_fragment_shader(const ShaderKey &key,
+                                            const ShaderPlan &plan) const;
 
 public:
   static TypeHandle get_class_type() {
