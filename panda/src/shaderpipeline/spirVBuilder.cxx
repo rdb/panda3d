@@ -83,7 +83,7 @@ SpirVBuilder(SpirVModule &module) :
  * given function.
  */
 SpirVBuilder::
-SpirVBuilder(SpirVModule &module, uint32_t function_id, size_t index) :
+SpirVBuilder(SpirVModule &module, SpirVId function_id, size_t index) :
   _module(module) {
   set_insertion_point(function_id, index);
 }
@@ -92,7 +92,7 @@ SpirVBuilder(SpirVModule &module, uint32_t function_id, size_t index) :
  * Positions the cursor at the given instruction index of the given function.
  */
 void SpirVBuilder::
-set_insertion_point(uint32_t function_id, size_t index) {
+set_insertion_point(SpirVId function_id, size_t index) {
   const pvector<Function> &functions = _module.get_functions();
   for (size_t fi = 0; fi < functions.size(); ++fi) {
     if (functions[fi].id == function_id) {
@@ -104,7 +104,40 @@ set_insertion_point(uint32_t function_id, size_t index) {
   }
   nassert_raise("no function with this id");
   _function_index = (size_t)-1;
-  _current_function_id = 0;
+  _current_function_id = SpirVId();
+}
+
+/**
+ * Positions the cursor at the top of the given function's body: after the
+ * OpLabel opening the entry block and past the OpVariable declarations that
+ * SPIR-V requires to lead it, so that inserted code may not accidentally
+ * precede a variable declaration.
+ */
+void SpirVBuilder::
+set_insertion_point_to_body_start(SpirVId function_id) {
+  set_insertion_point(function_id, 0);
+
+  Function *function = get_current_function();
+  nassertv(function != nullptr);
+  const pvector<Instruction> &instructions = function->instructions;
+
+  size_t index = 0;
+  while (index < instructions.size() &&
+         instructions[index].opcode != spv::OpLabel) {
+    ++index;
+  }
+  nassertv(index < instructions.size());
+  ++index;
+
+  while (index < instructions.size()) {
+    spv::Op opcode = instructions[index].opcode;
+    if (opcode != spv::OpVariable && opcode != spv::OpLine &&
+        opcode != spv::OpNoLine && opcode != spv::OpNop) {
+      break;
+    }
+    ++index;
+  }
+  _index = index;
 }
 
 /**
@@ -145,11 +178,11 @@ insert(spv::Op opcode, const uint32_t *args, size_t nargs) {
 /**
  * Inserts an OpLoad from the given pointer id.
  */
-uint32_t SpirVBuilder::
-op_load(uint32_t var_id, spv::MemoryAccessMask access) {
-  uint32_t type_id = _module.unwrap_pointer_type(_module.get_type_id(var_id));
+SpirVId SpirVBuilder::
+op_load(SpirVId var_id, spv::MemoryAccessMask access) {
+  SpirVId type_id = _module.unwrap_pointer_type(_module.get_type_id(var_id));
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   if (access != spv::MemoryAccessMaskNone) {
     insert(spv::OpLoad, {type_id, id, var_id, (uint32_t)access});
   } else {
@@ -162,19 +195,19 @@ op_load(uint32_t var_id, spv::MemoryAccessMask access) {
  * Inserts an OpStore to the given pointer id.
  */
 void SpirVBuilder::
-op_store(uint32_t var_id, uint32_t value) {
+op_store(SpirVId var_id, SpirVId value) {
   insert(spv::OpStore, {var_id, value});
 }
 
 /**
  * Inserts an OpSelect.
  */
-uint32_t SpirVBuilder::
-op_select(uint32_t cond, uint32_t obj1, uint32_t obj2) {
-  uint32_t type_id = _module.get_type_id(obj1);
-  nassertr(type_id == _module.get_type_id(obj2), 0);
+SpirVId SpirVBuilder::
+op_select(SpirVId cond, SpirVId obj1, SpirVId obj2) {
+  SpirVId type_id = _module.get_type_id(obj1);
+  nassertr(type_id == _module.get_type_id(obj2), SpirVId());
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(spv::OpSelect, {type_id, id, cond, obj1, obj2});
   return id;
 }
@@ -183,10 +216,10 @@ op_select(uint32_t cond, uint32_t obj1, uint32_t obj2) {
  * Inserts an OpAccessChain with the given base id (which must be a pointer)
  * and constant ids containing the various member/array indices.
  */
-uint32_t SpirVBuilder::
-op_access_chain(uint32_t var_id, std::initializer_list<uint32_t> chain) {
-  uint32_t base_pointer_type_id = _module.get_type_id(var_id);
-  nassertr(_module.get_kind(base_pointer_type_id) == SpirVModule::IdKind::POINTER_TYPE, 0);
+SpirVId SpirVBuilder::
+op_access_chain(SpirVId var_id, std::initializer_list<SpirVId> chain) {
+  SpirVId base_pointer_type_id = _module.get_type_id(var_id);
+  nassertr(_module.get_kind(base_pointer_type_id) == SpirVModule::IdKind::POINTER_TYPE, SpirVId());
 
   // The chain's pointer type must use the storage class as declared on the
   // base pointer type, not the canonicalized one that get_storage_class
@@ -195,13 +228,13 @@ op_access_chain(uint32_t var_id, std::initializer_list<uint32_t> chain) {
   // pointers, since declaring a StorageBuffer-class pointer requires
   // SPV_KHR_storage_buffer_storage_class before SPIR-V 1.3.
   const SpirVModule::Instruction *base_decl = _module.get_decl(base_pointer_type_id);
-  nassertr(base_decl != nullptr && base_decl->args.size() >= 3, 0);
+  nassertr(base_decl != nullptr && base_decl->args.size() >= 3, SpirVId());
   spv::StorageClass storage_class = (spv::StorageClass)base_decl->args[1];
 
-  uint32_t type_id = _module.unwrap_pointer_type(base_pointer_type_id);
+  SpirVId type_id = _module.unwrap_pointer_type(base_pointer_type_id);
   for (auto index_id : chain) {
     const Instruction *type_decl = _module.get_decl(type_id);
-    nassertr(type_decl != nullptr, 0);
+    nassertr(type_decl != nullptr, SpirVId());
 
     if (type_decl->opcode == spv::OpTypeStruct) {
       uint32_t member_index = _module.resolve_constant(index_id);
@@ -210,11 +243,11 @@ op_access_chain(uint32_t var_id, std::initializer_list<uint32_t> chain) {
       // Array, matrix, or vector
       type_id = _module.get_composite_member_type_id(type_id, 0);
     }
-    nassertr(type_id != 0, 0);
+    nassertr(type_id != 0, SpirVId());
   }
 
-  uint32_t id = allocate_id();
-  uint32_t pointer_type_id = _module.define_pointer_type(type_id, storage_class);
+  SpirVId id = allocate_id();
+  SpirVId pointer_type_id = _module.define_pointer_type(type_id, storage_class);
 
   Instruction op(spv::OpAccessChain, {pointer_type_id, id, var_id});
   op.args.insert(op.args.end(), chain.begin(), chain.end());
@@ -227,20 +260,20 @@ op_access_chain(uint32_t var_id, std::initializer_list<uint32_t> chain) {
  * at once, with the indices continuing to number into the second vector.
  * For a regular swizzle, pass the same vector twice.
  */
-uint32_t SpirVBuilder::
-op_vector_shuffle(uint32_t vec1, uint32_t vec2, const pvector<uint32_t> &components) {
+SpirVId SpirVBuilder::
+op_vector_shuffle(SpirVId vec1, SpirVId vec2, const pvector<uint32_t> &components) {
   const ShaderType *vec1_shader_type = _module.resolve_value_type(vec1);
   const ShaderType *vec2_shader_type = _module.resolve_value_type(vec2);
-  nassertr(vec1_shader_type != nullptr && vec2_shader_type != nullptr, 0);
+  nassertr(vec1_shader_type != nullptr && vec2_shader_type != nullptr, SpirVId());
   const ShaderType::Vector *vec1_type = vec1_shader_type->as_vector();
   const ShaderType::Vector *vec2_type = vec2_shader_type->as_vector();
-  nassertr(vec1_type != nullptr && vec2_type != nullptr, 0);
-  nassertr(vec1_type->get_scalar_type() == vec2_type->get_scalar_type(), 0);
+  nassertr(vec1_type != nullptr && vec2_type != nullptr, SpirVId());
+  nassertr(vec1_type->get_scalar_type() == vec2_type->get_scalar_type(), SpirVId());
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
 
   const ShaderType *result_type = ShaderType::register_type(ShaderType::Vector(vec1_type->get_scalar_type(), components.size()));
-  uint32_t type_id = _module.define_type(result_type);
+  SpirVId type_id = _module.define_type(result_type);
 
   Instruction op(spv::OpVectorShuffle, {type_id, id, vec1, vec2});
   op.args.insert(op.args.end(), components.begin(), components.end());
@@ -251,10 +284,10 @@ op_vector_shuffle(uint32_t vec1, uint32_t vec2, const pvector<uint32_t> &compone
 /**
  * Constructs a composite with the given type from the given constituents.
  */
-uint32_t SpirVBuilder::
-op_composite_construct(const ShaderType *type, const pvector<uint32_t> &constituents) {
-  uint32_t id = allocate_id();
-  uint32_t type_id = _module.define_type(type);
+SpirVId SpirVBuilder::
+op_composite_construct(const ShaderType *type, const pvector<SpirVId> &constituents) {
+  SpirVId id = allocate_id();
+  SpirVId type_id = _module.define_type(type);
 
   Instruction op(spv::OpCompositeConstruct, {type_id, id});
   op.args.insert(op.args.end(), constituents.begin(), constituents.end());
@@ -265,17 +298,17 @@ op_composite_construct(const ShaderType *type, const pvector<uint32_t> &constitu
 /**
  * Inserts an OpCompositeExtract.
  */
-uint32_t SpirVBuilder::
-op_composite_extract(uint32_t obj_id, std::initializer_list<uint32_t> chain) {
-  uint32_t type_id = _module.get_type_id(obj_id);
-  nassertr(_module.get_kind(type_id) != SpirVModule::IdKind::POINTER_TYPE, 0);
+SpirVId SpirVBuilder::
+op_composite_extract(SpirVId obj_id, std::initializer_list<uint32_t> chain) {
+  SpirVId type_id = _module.get_type_id(obj_id);
+  nassertr(_module.get_kind(type_id) != SpirVModule::IdKind::POINTER_TYPE, SpirVId());
 
   for (auto index : chain) {
     type_id = _module.get_composite_member_type_id(type_id, index);
-    nassertr(type_id != 0, 0);
+    nassertr(type_id != 0, SpirVId());
   }
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   Instruction op(spv::OpCompositeExtract, {type_id, id, obj_id});
   op.args.insert(op.args.end(), chain.begin(), chain.end());
   insert(std::move(op));
@@ -285,11 +318,11 @@ op_composite_extract(uint32_t obj_id, std::initializer_list<uint32_t> chain) {
 /**
  * Inserts an OpCompositeInsert.
  */
-uint32_t SpirVBuilder::
-op_composite_insert(uint32_t obj_id, uint32_t composite_id, std::initializer_list<uint32_t> chain) {
-  uint32_t type_id = _module.get_type_id(composite_id);
+SpirVId SpirVBuilder::
+op_composite_insert(SpirVId obj_id, SpirVId composite_id, std::initializer_list<uint32_t> chain) {
+  SpirVId type_id = _module.get_type_id(composite_id);
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   Instruction op(spv::OpCompositeInsert, {type_id, id, obj_id, composite_id});
   op.args.insert(op.args.end(), chain.begin(), chain.end());
   insert(std::move(op));
@@ -300,10 +333,10 @@ op_composite_insert(uint32_t obj_id, uint32_t composite_id, std::initializer_lis
  * Inserts a comparison op, taking two operands and returning a bool.
  * At the moment, only works on scalars.
  */
-uint32_t SpirVBuilder::
-op_compare(spv::Op opcode, uint32_t obj1, uint32_t obj2) {
-  uint32_t id = allocate_id();
-  uint32_t type_id = _module.define_type(ShaderType::BOOL);
+SpirVId SpirVBuilder::
+op_compare(spv::Op opcode, SpirVId obj1, SpirVId obj2) {
+  SpirVId id = allocate_id();
+  SpirVId type_id = _module.define_type(ShaderType::BOOL);
 
   insert(opcode, {type_id, id, obj1, obj2});
   return id;
@@ -313,10 +346,10 @@ op_compare(spv::Op opcode, uint32_t obj1, uint32_t obj2) {
  * Insert a conversion op to the given scalar type.  May be a scalar or vector.
  * If it is already of the given scalar type, does nothing.
  */
-uint32_t SpirVBuilder::
-op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
+SpirVId SpirVBuilder::
+op_convert(ShaderType::ScalarType new_scalar_type, SpirVId value) {
   const ShaderType *value_type = _module.resolve_value_type(value);
-  nassertr(value_type != nullptr, 0u);
+  nassertr(value_type != nullptr, SpirVId());
 
   const ShaderType *new_type = nullptr;
   ShaderType::ScalarType old_scalar_type = ShaderType::ST_float;
@@ -338,7 +371,7 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
     new_type = ShaderType::register_type(ShaderType::Vector(new_scalar_type, vector->get_num_components()));
   }
   else {
-    nassertr_always(false, 0);
+    nassertr_always(false, SpirVId());
   }
 
   bool old_float = old_scalar_type == ShaderType::ST_float
@@ -347,7 +380,7 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
                 || new_scalar_type == ShaderType::ST_double;
 
   if (old_scalar_type == ShaderType::ST_bool && new_scalar_type != ShaderType::ST_bool) {
-    uint32_t true_value, false_value;
+    SpirVId true_value, false_value;
     if (new_float) {
       true_value = define_float_constant(1.0f);
       false_value = define_float_constant(0.0f);
@@ -357,19 +390,19 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
       false_value = define_constant(scalar_type, 0u);
     }
     if (const ShaderType::Vector *vector = new_type->as_vector()) {
-      true_value = op_composite_construct(new_type, pvector<uint32_t>(vector->get_num_components(), true_value));
-      false_value = op_composite_construct(new_type, pvector<uint32_t>(vector->get_num_components(), false_value));
+      true_value = op_composite_construct(new_type, pvector<SpirVId>(vector->get_num_components(), true_value));
+      false_value = op_composite_construct(new_type, pvector<SpirVId>(vector->get_num_components(), false_value));
     }
     return op_select(value, true_value, false_value);
   }
 
   if (new_scalar_type == ShaderType::ST_bool && old_scalar_type != ShaderType::ST_bool) {
     // Conversion to bool is the same as != 0
-    uint32_t null_value = define_null_constant(value_type);
+    SpirVId null_value = define_null_constant(value_type);
     return op_compare(old_float ? spv::OpFUnordNotEqual : spv::OpINotEqual, value, null_value);
   }
 
-  uint32_t new_type_id = _module.define_type(new_type);
+  SpirVId new_type_id = _module.define_type(new_type);
 
   // Determine which conversion instruction to use.
   spv::Op opcode;
@@ -390,7 +423,7 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
     opcode = spv::OpBitcast;
   }
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(opcode, {new_type_id, id, value});
   return id;
 }
@@ -398,10 +431,10 @@ op_convert(ShaderType::ScalarType new_scalar_type, uint32_t value) {
 /**
  * Insert an OpBitcast.
  */
-uint32_t SpirVBuilder::
-op_bitcast(const ShaderType *new_type, uint32_t value) {
-  uint32_t id = allocate_id();
-  uint32_t new_type_id = _module.define_type(new_type);
+SpirVId SpirVBuilder::
+op_bitcast(const ShaderType *new_type, SpirVId value) {
+  SpirVId id = allocate_id();
+  SpirVId new_type_id = _module.define_type(new_type);
 
   insert(spv::OpBitcast, {new_type_id, id, value});
   return id;
@@ -410,12 +443,12 @@ op_bitcast(const ShaderType *new_type, uint32_t value) {
 /**
  * Inserts a matrix transpose instruction.
  */
-uint32_t SpirVBuilder::
-op_transpose(uint32_t obj) {
+SpirVId SpirVBuilder::
+op_transpose(SpirVId obj) {
   const ShaderType *type = _module.resolve_value_type(obj);
-  uint32_t type_id = _module.get_type_id(obj);
+  SpirVId type_id = _module.get_type_id(obj);
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
 
   if (const ShaderType::Matrix *matrix = type->as_matrix()) {
     if (matrix->get_num_rows() != matrix->get_num_columns()) {
@@ -433,15 +466,15 @@ op_transpose(uint32_t obj) {
 /**
  * Inserts a scalar or vector addition instruction.
  */
-uint32_t SpirVBuilder::
-op_add(uint32_t left, uint32_t right) {
-  nassertr(left != 0u, 0u);
-  nassertr(right != 0u, 0u);
+SpirVId SpirVBuilder::
+op_add(SpirVId left, SpirVId right) {
+  nassertr(left != 0u, SpirVId());
+  nassertr(right != 0u, SpirVId());
   const ShaderType *left_type = _module.resolve_value_type(left);
-  nassertr(left_type != nullptr, 0u);
+  nassertr(left_type != nullptr, SpirVId());
 #ifndef NDEBUG
   const ShaderType *right_type = _module.resolve_value_type(right);
-  nassertr(right_type != nullptr, 0u);
+  nassertr(right_type != nullptr, SpirVId());
 #endif
 
   ShaderType::ScalarType left_scalar_type;
@@ -453,7 +486,7 @@ op_add(uint32_t left, uint32_t right) {
 
 #ifndef NDEBUG
     const ShaderType::Scalar *right_scalar = right_type->as_scalar();
-    nassertr(right_scalar != nullptr, 0);
+    nassertr(right_scalar != nullptr, SpirVId());
     right_scalar_type = right_scalar->get_scalar_type();
 #endif
   }
@@ -462,29 +495,29 @@ op_add(uint32_t left, uint32_t right) {
 
 #ifndef NDEBUG
     const ShaderType::Vector *right_vector = right_type->as_vector();
-    nassertr(right_vector != nullptr, 0);
+    nassertr(right_vector != nullptr, SpirVId());
     right_scalar_type = right_vector->get_scalar_type();
 #endif
   }
   else {
-    nassertr(false, 0);
-    return 0u;
+    nassertr(false, SpirVId());
+    return SpirVId();
   }
 
   spv::Op opcode;
   if (left_scalar_type == ShaderType::ST_float || left_scalar_type == ShaderType::ST_double) {
     opcode = spv::OpFAdd;
 #ifndef NDEBUG
-    nassertr(right_scalar_type == left_scalar_type, 0);
+    nassertr(right_scalar_type == left_scalar_type, SpirVId());
 #endif
   } else {
     opcode = spv::OpIAdd;
 #ifndef NDEBUG
-    nassertr(right_scalar_type != ShaderType::ST_float && right_scalar_type != ShaderType::ST_double, 0);
+    nassertr(right_scalar_type != ShaderType::ST_float && right_scalar_type != ShaderType::ST_double, SpirVId());
 #endif
   }
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(opcode, {_module.get_type_id(left), id, left, right});
   return id;
 }
@@ -492,13 +525,13 @@ op_add(uint32_t left, uint32_t right) {
 /**
  * Inserts a scalar or vector subtraction instruction.
  */
-uint32_t SpirVBuilder::
-op_sub(uint32_t left, uint32_t right) {
-  nassertr(left != 0u, 0u);
-  nassertr(right != 0u, 0u);
+SpirVId SpirVBuilder::
+op_sub(SpirVId left, SpirVId right) {
+  nassertr(left != 0u, SpirVId());
+  nassertr(right != 0u, SpirVId());
   const ShaderType *left_type = _module.resolve_value_type(left);
-  nassertr(left_type != nullptr, 0u);
-  nassertr(left_type == _module.resolve_value_type(right), 0);
+  nassertr(left_type != nullptr, SpirVId());
+  nassertr(left_type == _module.resolve_value_type(right), SpirVId());
 
   ShaderType::ScalarType scalar_type;
   if (const ShaderType::Scalar *scalar = left_type->as_scalar()) {
@@ -508,8 +541,8 @@ op_sub(uint32_t left, uint32_t right) {
     scalar_type = vector->get_scalar_type();
   }
   else {
-    nassertr(false, 0);
-    return 0u;
+    nassertr(false, SpirVId());
+    return SpirVId();
   }
 
   spv::Op opcode;
@@ -519,7 +552,7 @@ op_sub(uint32_t left, uint32_t right) {
     opcode = spv::OpISub;
   }
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(opcode, {_module.get_type_id(left), id, left, right});
   return id;
 }
@@ -528,17 +561,17 @@ op_sub(uint32_t left, uint32_t right) {
  * Inserts a scalar division instruction.  Floating-point only, for now; see
  * op_convert for producing a float operand.
  */
-uint32_t SpirVBuilder::
-op_div(uint32_t left, uint32_t right) {
-  nassertr(left != 0u, 0u);
-  nassertr(right != 0u, 0u);
+SpirVId SpirVBuilder::
+op_div(SpirVId left, SpirVId right) {
+  nassertr(left != 0u, SpirVId());
+  nassertr(right != 0u, SpirVId());
 #ifndef NDEBUG
   const ShaderType *left_type = _module.resolve_value_type(left);
-  nassertr(left_type == _module.resolve_value_type(right), 0);
-  nassertr(is_float_scalar_type(get_element_scalar_type(left_type)), 0);
+  nassertr(left_type == _module.resolve_value_type(right), SpirVId());
+  nassertr(is_float_scalar_type(get_element_scalar_type(left_type)), SpirVId());
 #endif
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(spv::OpFDiv, {_module.get_type_id(left), id, left, right});
   return id;
 }
@@ -546,22 +579,22 @@ op_div(uint32_t left, uint32_t right) {
 /**
  * Inserts a vector dot instruction.
  */
-uint32_t SpirVBuilder::
-op_dot(uint32_t left, uint32_t right) {
-  nassertr(left != 0u, 0u);
-  nassertr(right != 0u, 0u);
+SpirVId SpirVBuilder::
+op_dot(SpirVId left, SpirVId right) {
+  nassertr(left != 0u, SpirVId());
+  nassertr(right != 0u, SpirVId());
   const ShaderType *left_type = _module.resolve_value_type(left);
-  nassertr(left_type != nullptr, 0u);
-  nassertr(left_type == _module.resolve_value_type(right), 0u);
+  nassertr(left_type != nullptr, SpirVId());
+  nassertr(left_type == _module.resolve_value_type(right), SpirVId());
 
   const ShaderType::Vector *vector = left_type->as_vector();
-  nassertr(vector != nullptr, 0u);
-  nassertr(is_float_scalar_type(vector->get_scalar_type()), 0u);
+  nassertr(vector != nullptr, SpirVId());
+  nassertr(is_float_scalar_type(vector->get_scalar_type()), SpirVId());
 
   const ShaderType *type = ShaderType::register_type(ShaderType::Scalar(vector->get_scalar_type()));
-  uint32_t type_id = _module.define_type(type);
+  SpirVId type_id = _module.define_type(type);
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(spv::OpDot, {type_id, id, left, right});
   return id;
 }
@@ -569,13 +602,13 @@ op_dot(uint32_t left, uint32_t right) {
 /**
  * Inserts a negation instruction.  Floating-point only, for now.
  */
-uint32_t SpirVBuilder::
-op_negate(uint32_t value) {
-  nassertr(value != 0u, 0u);
+SpirVId SpirVBuilder::
+op_negate(SpirVId value) {
+  nassertr(value != 0u, SpirVId());
   nassertr(is_float_scalar_type(get_element_scalar_type(
-    _module.resolve_value_type(value))), 0u);
+    _module.resolve_value_type(value))), SpirVId());
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(spv::OpFNegate, {_module.get_type_id(value), id, value});
   return id;
 }
@@ -583,94 +616,94 @@ op_negate(uint32_t value) {
 /**
  * Inserts a multiplication instruction.
  */
-uint32_t SpirVBuilder::
-op_multiply(uint32_t left, uint32_t right) {
-  nassertr(left != 0u, 0u);
-  nassertr(right != 0u, 0u);
+SpirVId SpirVBuilder::
+op_multiply(SpirVId left, SpirVId right) {
+  nassertr(left != 0u, SpirVId());
+  nassertr(right != 0u, SpirVId());
   const ShaderType *left_type = _module.resolve_value_type(left);
   const ShaderType *right_type = _module.resolve_value_type(right);
-  nassertr(left_type != nullptr, 0u);
-  nassertr(right_type != nullptr, 0u);
+  nassertr(left_type != nullptr, SpirVId());
+  nassertr(right_type != nullptr, SpirVId());
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
 
-  uint32_t type_id;
+  SpirVId type_id;
   spv::Op opcode;
 
   if (const ShaderType::Scalar *lscalar = left_type->as_scalar()) {
     if (const ShaderType::Scalar *rscalar = right_type->as_scalar()) {
-      nassertr(lscalar == rscalar, 0);
+      nassertr(lscalar == rscalar, SpirVId());
       // Floating-point only, for now.
-      nassertr(is_float_scalar_type(lscalar->get_scalar_type()), 0);
+      nassertr(is_float_scalar_type(lscalar->get_scalar_type()), SpirVId());
       opcode = spv::OpFMul;
       type_id = _module.get_type_id(left);
     }
     else if (const ShaderType::Vector *rvector = right_type->as_vector()) {
-      nassertr(lscalar->get_scalar_type() == rvector->get_scalar_type(), 0);
+      nassertr(lscalar->get_scalar_type() == rvector->get_scalar_type(), SpirVId());
       opcode = spv::OpVectorTimesScalar;
       type_id = _module.get_type_id(right);
       std::swap(left, right);
     }
     else if (const ShaderType::Matrix *rmatrix = right_type->as_matrix()) {
-      nassertr(lscalar->get_scalar_type() == rmatrix->get_scalar_type(), 0);
+      nassertr(lscalar->get_scalar_type() == rmatrix->get_scalar_type(), SpirVId());
       opcode = spv::OpMatrixTimesScalar;
       type_id = _module.get_type_id(right);
       std::swap(left, right);
     }
     else {
       nassert_raise("right side of multiplication is not a scalar, vector or matrix");
-      return 0u;
+      return SpirVId();
     }
   }
   else if (const ShaderType::Vector *lvector = left_type->as_vector()) {
     if (const ShaderType::Scalar *rscalar = right_type->as_scalar()) {
-      nassertr(lvector->get_scalar_type() == rscalar->get_scalar_type(), 0);
+      nassertr(lvector->get_scalar_type() == rscalar->get_scalar_type(), SpirVId());
       opcode = spv::OpVectorTimesScalar;
       type_id = _module.get_type_id(left);
     }
     else if (right_type->as_vector() != nullptr) {
       nassert_raise("op_multiply for vector times vector is ambiguous");
-      return 0u;
+      return SpirVId();
     }
     else if (const ShaderType::Matrix *rmatrix = right_type->as_matrix()) {
-      nassertr(lvector->get_scalar_type() == rmatrix->get_scalar_type(), 0);
-      nassertr(lvector->get_num_components() == rmatrix->get_num_columns(), 0);
+      nassertr(lvector->get_scalar_type() == rmatrix->get_scalar_type(), SpirVId());
+      nassertr(lvector->get_num_components() == rmatrix->get_num_columns(), SpirVId());
       opcode = spv::OpVectorTimesMatrix;
       const ShaderType *type = ShaderType::register_type(ShaderType::Vector(lvector->get_scalar_type(), rmatrix->get_num_rows()));
       type_id = _module.define_type(type);
     }
     else {
       nassert_raise("right side of multiplication is not a scalar, vector or matrix");
-      return 0u;
+      return SpirVId();
     }
   }
   else if (const ShaderType::Matrix *lmatrix = left_type->as_matrix()) {
     if (const ShaderType::Scalar *rscalar = right_type->as_scalar()) {
-      nassertr(lmatrix->get_scalar_type() == rscalar->get_scalar_type(), 0);
+      nassertr(lmatrix->get_scalar_type() == rscalar->get_scalar_type(), SpirVId());
       opcode = spv::OpMatrixTimesScalar;
       type_id = _module.get_type_id(left);
     }
     else if (const ShaderType::Vector *rvector = right_type->as_vector()) {
-      nassertr(lmatrix->get_scalar_type() == rvector->get_scalar_type(), 0);
-      nassertr(lmatrix->get_num_rows() == rvector->get_num_components(), 0);
+      nassertr(lmatrix->get_scalar_type() == rvector->get_scalar_type(), SpirVId());
+      nassertr(lmatrix->get_num_rows() == rvector->get_num_components(), SpirVId());
       opcode = spv::OpMatrixTimesVector;
       const ShaderType *type = ShaderType::register_type(ShaderType::Vector(lmatrix->get_scalar_type(), lmatrix->get_num_columns()));
       type_id = _module.define_type(type);
     }
     else if (const ShaderType::Matrix *rmatrix = right_type->as_matrix()) {
-      nassertr(lmatrix->get_scalar_type() == rmatrix->get_scalar_type(), 0);
+      nassertr(lmatrix->get_scalar_type() == rmatrix->get_scalar_type(), SpirVId());
       opcode = spv::OpMatrixTimesMatrix;
       const ShaderType *type = ShaderType::register_type(ShaderType::Matrix(lmatrix->get_scalar_type(), rmatrix->get_num_rows(), lmatrix->get_num_columns()));
       type_id = _module.define_type(type);
     }
     else {
       nassert_raise("right side of multiplication is not a scalar, vector or matrix");
-      return 0u;
+      return SpirVId();
     }
   }
   else {
     nassert_raise("left side of multiplication is not a scalar, vector or matrix");
-    return 0u;
+    return SpirVId();
   }
 
   insert(opcode, {type_id, id, left, right});
@@ -681,17 +714,17 @@ op_multiply(uint32_t left, uint32_t right) {
  * Inserts an OpImageSampleExplicitLod or OpImageSampleImplicitLod, depending
  * on whether a Lod is included.
  */
-uint32_t SpirVBuilder::
-op_image_sample(uint32_t image, uint32_t coord, uint32_t operands, const uint32_t *ids) {
-  uint32_t id = allocate_id();
+SpirVId SpirVBuilder::
+op_image_sample(SpirVId image, SpirVId coord, uint32_t operands, const uint32_t *ids) {
+  SpirVId id = allocate_id();
 
   const ShaderType *image_type = _module.resolve_value_type(image);
-  nassertr(image_type != nullptr, 0u);
+  nassertr(image_type != nullptr, SpirVId());
   const ShaderType::SampledImage *sampled_image = image_type->as_sampled_image();
-  nassertr(sampled_image != nullptr, 0u);
+  nassertr(sampled_image != nullptr, SpirVId());
 
   const ShaderType *type = ShaderType::register_type(ShaderType::Vector(sampled_image->get_sampled_type(), 4));
-  uint32_t type_id = _module.define_type(type);
+  SpirVId type_id = _module.define_type(type);
 
   spv::Op opcode;
   if (operands & spv::ImageOperandsLodMask) {
@@ -700,6 +733,8 @@ op_image_sample(uint32_t image, uint32_t coord, uint32_t operands, const uint32_
     opcode = spv::OpImageSampleImplicitLod;
   }
 
+  // NOTE: this miscounts image operands that carry more than one id (Grad
+  // has two); to be addressed when a caller needs those.
   uint32_t num_ids = ids != nullptr ? ::count_bits_in_word(operands) : 0u;
   Instruction op(opcode, {type_id, id, image, coord, operands});
   if (num_ids > 0) {
@@ -712,16 +747,16 @@ op_image_sample(uint32_t image, uint32_t coord, uint32_t operands, const uint32_
 /**
  * Inserts an OpFunctionCall passing no arguments.
  */
-uint32_t SpirVBuilder::
-op_function_call(uint32_t func_id) {
-  uint32_t id = allocate_id();
+SpirVId SpirVBuilder::
+op_function_call(SpirVId func_id) {
+  SpirVId id = allocate_id();
 
-  nassertr(_module.get_kind(func_id) == SpirVModule::IdKind::FUNCTION, 0);
+  nassertr(_module.get_kind(func_id) == SpirVModule::IdKind::FUNCTION, SpirVId());
 
-  uint32_t function_type_id = _module.get_type_id(func_id);
-  nassertr(_module.get_kind(function_type_id) == SpirVModule::IdKind::FUNCTION_TYPE, 0);
+  SpirVId function_type_id = _module.get_type_id(func_id);
+  nassertr(_module.get_kind(function_type_id) == SpirVModule::IdKind::FUNCTION_TYPE, SpirVId());
 
-  uint32_t return_type_id = _module.get_type_id(function_type_id);
+  SpirVId return_type_id = _module.get_type_id(function_type_id);
 
   insert(spv::OpFunctionCall, {return_type_id, id, func_id});
   return id;
@@ -731,13 +766,13 @@ op_function_call(uint32_t func_id) {
  * Starts a new function returning void and taking no arguments, at the end
  * of the module, positioning the cursor inside it.
  */
-uint32_t SpirVBuilder::
+SpirVId SpirVBuilder::
 op_function(const ShaderType *return_type) {
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
 
-  uint32_t function_type_id = _module.define_function_type(return_type);
-  uint32_t return_type_id = _module.get_type_id(function_type_id);
-  nassertr(return_type_id != 0, 0);
+  SpirVId function_type_id = _module.define_function_type(return_type);
+  SpirVId return_type_id = _module.get_type_id(function_type_id);
+  nassertr(return_type_id != 0, SpirVId());
 
   pvector<Function> &functions = _module.modify_functions();
   functions.push_back(Function {id, {}});
@@ -752,9 +787,9 @@ op_function(const ShaderType *return_type) {
 /**
  * Inserts an OpLabel.
  */
-uint32_t SpirVBuilder::
+SpirVId SpirVBuilder::
 op_label() {
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   insert(spv::OpLabel, {id});
   return id;
 }
@@ -763,7 +798,7 @@ op_label() {
  * Inserts an OpBranch.
  */
 void SpirVBuilder::
-op_branch(uint32_t target) {
+op_branch(SpirVId target) {
   insert(spv::OpBranch, {target});
 }
 
@@ -789,7 +824,7 @@ op_kill() {
 void SpirVBuilder::
 op_function_end() {
   insert(spv::OpFunctionEnd, {});
-  _current_function_id = 0;
+  _current_function_id = SpirVId();
   _function_index = (size_t)-1;
   _index = 0;
 }
@@ -798,10 +833,10 @@ op_function_end() {
  * Begins an "if" branch.
  * The return value should be passed to branch_endif().
  */
-uint32_t SpirVBuilder::
-branch_if(uint32_t cond) {
-  uint32_t true_label = allocate_id();
-  uint32_t false_label = allocate_id();
+SpirVId SpirVBuilder::
+branch_if(SpirVId cond) {
+  SpirVId true_label = allocate_id();
+  SpirVId false_label = allocate_id();
 
   insert(spv::OpSelectionMerge, {false_label, (uint32_t)spv::SelectionControlMaskNone});
   insert(spv::OpBranchConditional, {cond, true_label, false_label});
@@ -813,7 +848,7 @@ branch_if(uint32_t cond) {
  * Ends an "if" branch.
  */
 void SpirVBuilder::
-branch_endif(uint32_t false_label) {
+branch_endif(SpirVId false_label) {
   // The block being ended must not fall through into the merge label; if the
   // code inserted since branch_if did not end with its own terminator (such
   // as the OpKill of the alpha test), branch to the merge block explicitly.

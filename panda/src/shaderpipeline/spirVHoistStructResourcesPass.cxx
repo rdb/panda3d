@@ -12,6 +12,7 @@
  */
 
 #include "spirVHoistStructResourcesPass.h"
+#include "spirVInstructionCursor.h"
 #include "string_utils.h"
 
 /**
@@ -29,7 +30,7 @@ run(SpirVModule &module) {
   // the names of the variables they were hoisted out of.
   for (const auto &item : _hoisted_vars) {
     const AccessChain &access_chain = item.first;
-    uint32_t var_id = item.second;
+    Id var_id = item.second;
 
     std::string name = module.get_name(access_chain._var_id);
     if (!name.empty()) {
@@ -41,7 +42,7 @@ run(SpirVModule &module) {
   }
 
   // Now apply the deferred deletions.
-  for (uint32_t id : _deleted) {
+  for (Id id : _deleted) {
     module.delete_id(id);
   }
 }
@@ -50,11 +51,11 @@ run(SpirVModule &module) {
  * Returns the original (pre-deletion) type id of the given member of the
  * given struct, which may differ from the module's current members.
  */
-uint32_t SpirVHoistStructResourcesPass::
-get_original_member_type_id(SpirVModule &module, uint32_t struct_id, uint32_t index) const {
+SpirVId SpirVHoistStructResourcesPass::
+get_original_member_type_id(SpirVModule &module, SpirVId struct_id, uint32_t index) const {
   auto it = _original_members.find(struct_id);
   if (it != _original_members.end()) {
-    nassertr(index < it->second.size(), 0);
+    nassertr(index < it->second.size(), Id());
     return it->second[index];
   }
   return module.get_member_type_id(struct_id, index);
@@ -68,13 +69,14 @@ get_original_member_type_id(SpirVModule &module, uint32_t struct_id, uint32_t in
  */
 void SpirVHoistStructResourcesPass::
 process_globals(SpirVModule &module) {
-  // The walk appends declarations (pointer types, hoisted variables); only
-  // the original declarations are visited.
-  size_t num_globals = module.get_globals().size();
-
-  for (size_t i = 0; i < num_globals; ++i) {
-    // Copy, since appending declarations may invalidate references.
-    Instruction op = module.get_globals()[i];
+  // The cursor visits only the original declarations; the pointer types and
+  // hoisted variables appended during the walk are not visited.
+  SpirVGlobalsCursor cursor(module);
+  while (cursor.next()) {
+    // Copy: appending declarations invalidates the cursor's reference, and
+    // delete_struct_member edits the declaration whose original operands the
+    // member walk below iterates.
+    Instruction op = *cursor;
 
     switch (op.opcode) {
     case spv::OpTypeImage:
@@ -89,16 +91,20 @@ process_globals(SpirVModule &module) {
     case spv::OpTypeForwardPointer:
     case spv::OpTypePipeStorage:
     case spv::OpTypeNamedBarrier:
-      _hoist_types.insert(op.args[0]);
+      _hoist_types.insert(Id(op.args[0]));
       break;
 
     case spv::OpTypeStruct:
       if (op.args.size() >= 2) {
-        uint32_t type_id = op.args[0];
+        Id type_id(op.args[0]);
 
         // Keep the original member type ids around for the function body
         // rewrite, which needs to resolve pre-deletion member indices.
-        pvector<uint32_t> original_members(op.args.data() + 1, op.args.data() + op.args.size());
+        pvector<Id> original_members;
+        original_members.reserve(op.args.size() - 1);
+        for (size_t ai = 1; ai < op.args.size(); ++ai) {
+          original_members.push_back(Id(op.args[ai]));
+        }
         pvector<int> remap(op.args.size() - 1, -1);
 
         // Does this contain a type we should hoist?
@@ -106,7 +112,7 @@ process_globals(SpirVModule &module) {
         uint32_t num_kept = 0;
         for (size_t ai = 1; ai < op.args.size(); ++ai) {
           uint32_t member_index = (uint32_t)(ai - 1);
-          uint32_t member_type_id = op.args[ai];
+          Id member_type_id(op.args[ai]);
 
           auto ait = _affected_types.find(member_type_id);
           if (ait != _affected_types.end()) {
@@ -161,17 +167,17 @@ process_globals(SpirVModule &module) {
 
     case spv::OpTypeArray:
       if (op.args.size() >= 3) {
-        uint32_t elem_type_id = op.args[1];
-        uint32_t size = module.resolve_constant(op.args[2]);
+        Id elem_type_id(op.args[1]);
+        uint32_t size = module.resolve_constant(Id(op.args[2]));
         if (_hoist_types.count(elem_type_id)) {
           // Arrays of hoisted types are also hoisted.
-          _hoist_types.insert(op.args[0]);
+          _hoist_types.insert(Id(op.args[0]));
         }
         auto ait = _affected_types.find(elem_type_id);
         if (ait != _affected_types.end() && size > 0) {
           // Copy over the access chains to the new type, but wrap the type
           // with the array.
-          auto &access_chains = _affected_types[op.args[0]];
+          auto &access_chains = _affected_types[Id(op.args[0])];
           for (auto &pair : ait->second) {
             access_chains.emplace_back(ShaderType::register_type(ShaderType::Array(pair.first, size)), pair.second);
           }
@@ -179,26 +185,26 @@ process_globals(SpirVModule &module) {
 
         // If the struct contained only resources, delete the array as well.
         if (is_deleted(elem_type_id)) {
-          _deleted.insert(op.args[0]);
+          _deleted.insert(Id(op.args[0]));
           break;
         }
         if (_emptied_structs.count(elem_type_id)) {
           // An array of an emptied struct is itself emptied: the declaration
           // remains, but variables and parameters of it are removed.
-          _emptied_structs.insert(op.args[0]);
+          _emptied_structs.insert(Id(op.args[0]));
         }
       }
       break;
 
     case spv::OpTypePointer:
       if (op.args.size() >= 3) {
-        if (_affected_types.count(op.args[2])) {
-          _affected_pointer_types.insert(op.args[0]);
+        if (_affected_types.count(Id(op.args[2]))) {
+          _affected_pointer_types.insert(Id(op.args[0]));
         }
-        if (is_deleted(op.args[2]) || _emptied_structs.count(op.args[2])) {
+        if (is_deleted(Id(op.args[2])) || _emptied_structs.count(Id(op.args[2]))) {
           // The pointee type was deleted, or was emptied to the point that
           // nothing can be accessed through this pointer anymore.
-          _deleted.insert(op.args[0]);
+          _deleted.insert(Id(op.args[0]));
         }
       }
       break;
@@ -210,7 +216,7 @@ process_globals(SpirVModule &module) {
         Args new_args({op.args[0], op.args[1]});
 
         for (size_t ai = 2; ai < op.args.size(); ++ai) {
-          uint32_t arg = op.args[ai];
+          Id arg(op.args[ai]);
           if (!is_deleted(arg)) {
             new_args.push_back(arg);
           }
@@ -225,7 +231,7 @@ process_globals(SpirVModule &module) {
             // Passing a struct with non-opaque types to a function.  That
             // means adding additional parameters for the hoisted variables.
             for (auto &pair : ait->second) {
-              uint32_t type_ptr_id = module.define_pointer_type(pair.first, spv::StorageClassUniformConstant);
+              Id type_ptr_id = module.define_pointer_type(pair.first, spv::StorageClassUniformConstant);
               new_args.push_back(type_ptr_id);
             }
           }
@@ -234,29 +240,29 @@ process_globals(SpirVModule &module) {
         // Update the declaration.  Note that there is a slight chance that
         // this could introduce a duplicate function type, which is illegal
         // SPIR-V; the deduplication that runs after the pass merges those.
-        module.modify_globals()[i].args = std::move(new_args);
+        cursor->args = std::move(new_args);
       }
       break;
 
     case spv::OpVariable:
       if (op.args.size() >= 3) {
-        uint32_t type_id = module.unwrap_pointer_type(op.args[0]);
+        Id type_id = module.unwrap_pointer_type(Id(op.args[0]));
 
         // If the struct contained only resources, the variable is deleted, but
         // the resources therein must of course still be hoisted out of it.
-        bool remove = is_deleted(type_id) || is_deleted(op.args[0]) ||
+        bool remove = is_deleted(type_id) || is_deleted(Id(op.args[0])) ||
                       _emptied_structs.count(type_id) != 0;
 
         auto ait = _affected_types.find(type_id);
         if (ait != _affected_types.end()) {
-          uint32_t var_id = op.args[1];
+          Id var_id(op.args[1]);
           spv::StorageClass storage_class = (spv::StorageClass)op.args[2];
 
           for (const auto &pair : ait->second) {
             const ShaderType *new_type = pair.first;
             const AccessChain &access_chain = pair.second;
 
-            uint32_t new_id = module.define_variable(new_type, storage_class);
+            Id new_id = module.define_variable(new_type, storage_class);
 
             AccessChain new_access_chain(access_chain);
             new_access_chain._var_id = var_id;
@@ -266,7 +272,7 @@ process_globals(SpirVModule &module) {
         }
 
         if (remove) {
-          _deleted.insert(op.args[1]);
+          _deleted.insert(Id(op.args[1]));
         }
       }
       break;
@@ -282,21 +288,21 @@ process_globals(SpirVModule &module) {
  */
 void SpirVHoistStructResourcesPass::
 process_function(SpirVModule &module, Function &function) {
-  for (size_t i = 0; i < function.instructions.size(); ++i) {
-    Instruction &op = function.instructions[i];
-
-    switch (op.opcode) {
+  SpirVInstructionCursor cursor(module, function);
+  while (cursor.next()) {
+    switch (cursor->opcode) {
     case spv::OpFunctionParameter:
-      // Erase parameters of deleted types, and insert parameters for the
+      // Remove parameters of deleted types, and insert parameters for the
       // variables hoisted out of structs passed in.
-      if (op.args.size() >= 2) {
-        uint32_t param_type_id = op.args[0];
-        uint32_t param_id = op.args[1];
+      if (cursor->args.size() >= 2) {
+        Id param_type_id(cursor->args[0]);
+        Id param_id(cursor->args[1]);
 
         if (is_deleted(param_type_id)) {
+          // Tombstone the instruction now, but keep the id state queryable
+          // until the deferred deletion at the end of the pass.
           _deleted.insert(param_id);
-          function.instructions.erase(function.instructions.begin() + i);
-          --i;
+          cursor.detach();
         }
 
         // Structs with non-opaque types must be passed through pointers.
@@ -308,53 +314,53 @@ process_function(SpirVModule &module, Function &function) {
 
           // Passing a struct with non-opaque types to a function.  That means
           // adding additional parameters for the hoisted variables.
-          SpirVBuilder builder(module, function.id, i + 1);
-          for (auto &pair : ait->second) {
-            uint32_t type_ptr_id = module.define_pointer_type(pair.first, spv::StorageClassUniformConstant);
-            uint32_t id = builder.allocate_id();
-            builder.insert(spv::OpFunctionParameter, {type_ptr_id, id});
+          cursor.insert_after([&](SpirVBuilder &builder) {
+            for (auto &pair : ait->second) {
+              Id type_ptr_id = module.define_pointer_type(pair.first, spv::StorageClassUniformConstant);
+              Id id = builder.allocate_id();
+              builder.insert(spv::OpFunctionParameter, {type_ptr_id, id});
 
-            AccessChain access_chain(pair.second);
-            access_chain._var_id = param_id;
-            _hoisted_vars[std::move(access_chain)] = id;
-          }
-          i = builder.get_insertion_index() - 1;
+              AccessChain access_chain(pair.second);
+              access_chain._var_id = param_id;
+              _hoisted_vars[std::move(access_chain)] = id;
+            }
+          });
         }
       }
       break;
 
     case spv::OpAccessChain:
     case spv::OpInBoundsAccessChain:
-      if (op.args.size() >= 4) {
-        uint32_t result_pointer_type_id = op.args[0];
+      if (cursor->args.size() >= 4) {
+        Id result_pointer_type_id(cursor->args[0]);
         if (is_deleted(result_pointer_type_id)) {
           // The pointer type was deleted because it pointed into a struct that
           // contained only resources; the chain must also be deleted.
-          _deleted.insert(op.args[1]);
-          function.instructions.erase(function.instructions.begin() + i);
-          --i;
+          _deleted.insert(Id(cursor->args[1]));
+          cursor.detach();
           break;
         }
-        uint32_t result_type_id = module.unwrap_pointer_type(result_pointer_type_id);
+        Id result_type_id = module.unwrap_pointer_type(result_pointer_type_id);
 
         if (is_deleted(result_type_id)) {
           // Empty struct, so access chain must also be deleted.
-          _deleted.insert(op.args[1]);
-          function.instructions.erase(function.instructions.begin() + i);
-          --i;
+          _deleted.insert(Id(cursor->args[1]));
+          cursor.detach();
           break;
         }
 
         // Walk through the access chain.  The base variable and its pointer
         // type may be slated for deletion (if the struct contained nothing
         // but resources), but their declarations are still intact.
-        uint32_t base_pointer_type_id = module.get_type_id(op.args[2]);
-        uint32_t parent_id = module.unwrap_pointer_type(base_pointer_type_id);
+        Id base_pointer_type_id = module.get_type_id(Id(cursor->args[2]));
+        Id parent_id = module.unwrap_pointer_type(base_pointer_type_id);
+
+        Instruction &op = *cursor;
 
         if (_hoist_types.count(result_type_id)) {
           // Construct the access chain with just struct members, to figure
           // out which variable it's referring to.
-          AccessChain access_chain(op.args[2]);
+          AccessChain access_chain(Id(op.args[2]));
 
           Args new_args({op.args[0], op.args[1], op.args[2]});
 
@@ -363,10 +369,10 @@ process_function(SpirVModule &module, Function &function) {
             nassertv(parent_decl != nullptr);
             if (parent_decl->opcode != spv::OpTypeStruct) { // array
               parent_id = module.get_composite_member_type_id(parent_id, 0);
-              nassertv(parent_id > 0);
+              nassertv(parent_id != 0);
               new_args.push_back(op.args[ai]);
             } else {
-              uint32_t index = module.resolve_constant(op.args[ai]);
+              uint32_t index = module.resolve_constant(Id(op.args[ai]));
               access_chain.append(index);
 
               parent_id = get_original_member_type_id(module, parent_id, index);
@@ -381,7 +387,7 @@ process_function(SpirVModule &module, Function &function) {
 
           auto hit = _hoisted_vars.find(access_chain);
           nassertv(hit != _hoisted_vars.end());
-          uint32_t new_var_id = hit->second;
+          Id new_var_id = hit->second;
 
           // Change the access chain to remove the struct member indices, and
           // the base id to our variable.
@@ -394,7 +400,7 @@ process_function(SpirVModule &module, Function &function) {
           // We may still need to remap the struct member indices.
           // It may also still be pointing to a struct containing a non-opaque
           // type, so add additional access chains for the hoisted members.
-          AccessChain access_chain(op.args[2]);
+          AccessChain access_chain(Id(op.args[2]));
 
           Args new_args({op.args[0], op.args[1], op.args[2]});
           Args hoisted_new_args({0, 0, 0});
@@ -408,10 +414,10 @@ process_function(SpirVModule &module, Function &function) {
               parent_id = module.get_composite_member_type_id(parent_id, 0);
               new_args.push_back(op.args[ai]);
               hoisted_new_args.push_back(op.args[ai]);
-              nassertv(parent_id > 0);
+              nassertv(parent_id != 0);
             }
             else if (parent_decl->opcode == spv::OpTypeStruct) {
-              uint32_t index = module.resolve_constant(op.args[ai]);
+              uint32_t index = module.resolve_constant(Id(op.args[ai]));
 
               int new_index = (int)index;
               auto rit = _member_remap.find(parent_id);
@@ -443,52 +449,52 @@ process_function(SpirVModule &module, Function &function) {
           }
 
           if (deleted_member) {
-            _deleted.insert(op.args[1]);
-            function.instructions.erase(function.instructions.begin() + i);
-            --i;
+            _deleted.insert(Id(op.args[1]));
+            cursor.detach();
             break;
           }
 
-          uint32_t orig_chain_id = op.args[1];
+          Id orig_chain_id(op.args[1]);
           op.args = std::move(new_args);
 
           auto ait = _affected_types.find(result_type_id);
           if (ait != _affected_types.end()) {
-            SpirVBuilder builder(module, function.id, i + 1);
-            for (auto &pair : ait->second) {
-              AccessChain full(access_chain);
-              full.extend(pair.second);
+            cursor.insert_after([&](SpirVBuilder &builder) {
+              for (auto &pair : ait->second) {
+                AccessChain full(access_chain);
+                full.extend(pair.second);
 
-              auto hit = _hoisted_vars.find(full);
-              nassertv(hit != _hoisted_vars.end());
-              uint32_t hoisted_var_id = hit->second;
+                auto hit = _hoisted_vars.find(full);
+                nassertv(hit != _hoisted_vars.end());
+                Id hoisted_var_id = hit->second;
 
-              uint32_t hoisted_type_ptr_id = module.define_pointer_type(pair.first, spv::StorageClassUniformConstant);
-              nassertv(hoisted_type_ptr_id != 0);
+                Id hoisted_type_ptr_id = module.define_pointer_type(pair.first, spv::StorageClassUniformConstant);
+                nassertv(hoisted_type_ptr_id != 0);
 
-              uint32_t id = builder.allocate_id();
-              hoisted_new_args[0] = hoisted_type_ptr_id;
-              hoisted_new_args[1] = id;
-              hoisted_new_args[2] = hoisted_var_id;
-              builder.insert(spv::OpAccessChain, hoisted_new_args.data(), hoisted_new_args.size());
+                Id id = builder.allocate_id();
+                hoisted_new_args[0] = hoisted_type_ptr_id;
+                hoisted_new_args[1] = id;
+                hoisted_new_args[2] = hoisted_var_id;
+                builder.insert(spv::OpAccessChain, hoisted_new_args.data(), hoisted_new_args.size());
 
-              AccessChain new_access_chain(pair.second);
-              new_access_chain._var_id = orig_chain_id;
-              _hoisted_vars[std::move(new_access_chain)] = id;
-            }
-            i = builder.get_insertion_index() - 1;
+                AccessChain new_access_chain(pair.second);
+                new_access_chain._var_id = orig_chain_id;
+                _hoisted_vars[std::move(new_access_chain)] = id;
+              }
+            });
           }
         }
       }
       break;
 
     case spv::OpFunctionCall:
-      if (op.args.size() >= 3) {
+      if (cursor->args.size() >= 3) {
+        Instruction &op = *cursor;
         Args new_args({op.args[0], op.args[1], op.args[2]});
 
         for (size_t ai = 3; ai < op.args.size(); ++ai) {
-          uint32_t arg = op.args[ai];
-          uint32_t arg_type_id = module.get_type_id(arg);
+          Id arg(op.args[ai]);
+          Id arg_type_id = module.get_type_id(arg);
           if (!is_deleted(arg_type_id) && !is_deleted(arg)) {
             new_args.push_back(arg);
           }
@@ -540,30 +546,29 @@ process_function(SpirVModule &module, Function &function) {
       // If this triggers, the struct is being loaded into another variable,
       // which means we can't unwrap this (for now).  If it turns out that
       // people actually do this, we can add support.
-      nassertv(!_affected_types.count(op.args[0]));
-      nassertv(!is_deleted(op.args[2]));
+      nassertv(!_affected_types.count(Id(cursor->args[0])));
+      nassertv(!is_deleted(Id(cursor->args[2])));
       break;
 
     case spv::OpCopyObject:
     case spv::OpCopyLogical:
     case spv::OpExpectKHR:
       // Not allowed to copy structs containing resources.
-      nassertv(!_affected_types.count(op.args[0]));
-      nassertv(!_affected_pointer_types.count(op.args[0]));
+      nassertv(!_affected_types.count(Id(cursor->args[0])));
+      nassertv(!_affected_pointer_types.count(Id(cursor->args[0])));
 
       // Copying an empty struct means deleting the copy.
-      if (is_deleted(op.args[2]) || is_deleted(op.args[0])) {
-        _deleted.insert(op.args[1]);
-        function.instructions.erase(function.instructions.begin() + i);
-        --i;
+      if (is_deleted(Id(cursor->args[2])) || is_deleted(Id(cursor->args[0]))) {
+        _deleted.insert(Id(cursor->args[1]));
+        cursor.detach();
       }
       break;
 
     case spv::OpReturnValue:
       // Cannot return a struct with an opaque type from a function.
-      if (op.args.size() >= 1) {
-        uint32_t type_id = module.get_type_id(op.args[0]);
-        nassertv(!is_deleted(op.args[0]));
+      if (cursor->args.size() >= 1) {
+        Id type_id = module.get_type_id(Id(cursor->args[0]));
+        nassertv(!is_deleted(Id(cursor->args[0])));
         nassertv(!is_deleted(type_id));
         nassertv(!_affected_types.count(type_id));
         nassertv(!_affected_pointer_types.count(type_id));

@@ -22,12 +22,12 @@ TEST_CASE("SpirVMakeBlockPass gathers variables into a block", "[shaderpipeline]
   const ShaderType *vec4_type =
     ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
 
-  uint32_t id_var_a = module.define_variable(ShaderType::FLOAT, spv::StorageClassUniformConstant);
+  Id id_var_a = module.define_variable(ShaderType::FLOAT, spv::StorageClassUniformConstant);
   module.set_name(id_var_a, "a");
-  uint32_t id_var_b = module.define_variable(vec4_type, spv::StorageClassUniformConstant);
+  Id id_var_b = module.define_variable(vec4_type, spv::StorageClassUniformConstant);
   module.set_name(id_var_b, "b");
 
-  uint32_t main_id = add_main(module, spv::ExecutionModelFragment);
+  Id main_id = add_main(module, spv::ExecutionModelFragment);
   {
     SpirVBuilder builder = builder_before_return(module, main_id);
     builder.op_load(id_var_a);

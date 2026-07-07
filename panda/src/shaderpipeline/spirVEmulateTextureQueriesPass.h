@@ -31,13 +31,13 @@ public:
 private:
   const uint64_t _emulate_caps;
 
-  pmap<uint32_t, AccessChain> _access_chains;
-  uint32_t _float_one_id = 0;
-  uint32_t _float_zero_id = 0;
+  pmap<SpirVId, AccessChain> _access_chains;
+  SpirVId _float_one_id;
+  SpirVId _float_zero_id;
 
 public:
   // access chain to size var id
-  pmap<AccessChain, uint32_t> _size_var_ids;
+  pmap<AccessChain, SpirVId> _size_var_ids;
 };
 
 #endif

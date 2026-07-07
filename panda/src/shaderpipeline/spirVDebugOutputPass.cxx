@@ -35,9 +35,9 @@ run(SpirVModule &module) {
 
   // Identify the extended instruction sets we care about.  The DebugPrintf
   // import is removed, along with every instruction using it (below).
-  pvector<uint32_t> deleted_imports;
+  pvector<Id> deleted_imports;
   for (const Instruction &import : module.get_ext_inst_imports()) {
-    uint32_t id = import.args[0];
+    Id id(import.args[0]);
     std::string name = import.get_string(1);
     if (name == "NonSemantic.DebugPrintf") {
       _ext_inst_imports[id] = EI_nonsemantic_debugprintf;
@@ -55,26 +55,26 @@ run(SpirVModule &module) {
   // Also scan for debug source information declared at module scope.
   for (const Instruction &op : module.get_globals()) {
     if (op.opcode == spv::OpConstant && op.args.size() == 3) {
-      if (module.resolve_type(op.args[0]) == ShaderType::UINT) {
+      if (module.resolve_type(Id(op.args[0])) == ShaderType::UINT) {
         uint32_t value = op.args[2];
         if (value <= 256u) {
           if (value >= _numbers.size()) {
-            _numbers.resize(value + 1, 0u);
+            _numbers.resize(value + 1, Id());
           }
-          _numbers[value] = op.args[1];
+          _numbers[value] = Id(op.args[1]);
         }
       }
     }
     else if (op.opcode == spv::OpExtInst && op.args.size() >= 5 &&
              get_ext_inst_import(op.args[2]) == EI_nonsemantic_shader_debuginfo_100) {
       if (op.args[3] == 35 /*DebugSource*/) {
-        _debug_source_files[op.args[1]] = op.args[4];
+        _debug_source_files[op.args[1]] = Id(op.args[4]);
       }
     }
   }
 
   for (Function &function : module.modify_functions()) {
-    _current_file = 0;
+    _current_file = Id();
     _current_line = 0;
 
     SpirVInstructionCursor cursor(module, function);
@@ -86,7 +86,7 @@ run(SpirVModule &module) {
           op.args[3] == 1 /*DebugPrintf*/) {
 
 #ifndef NDEBUG
-        std::string string = op.args.size() >= 5 ? module.resolve_string(op.args[4]) : std::string();
+        std::string string = op.args.size() >= 5 ? module.resolve_string(Id(op.args[4])) : std::string();
         if (!string.empty()) {
           pvector<uint32_t> fmt_args(op.args.data() + 5, op.args.data() + op.args.size());
 
@@ -94,7 +94,7 @@ run(SpirVModule &module) {
             if (string == "%!") {
               // Special internal format string that issues an assertion.  The
               // argument contains the expression.
-              emit_assert(builder, !fmt_args.empty() ? module.resolve_string(fmt_args[0]) : "");
+              emit_assert(builder, !fmt_args.empty() ? module.resolve_string(Id(fmt_args[0])) : "");
             } else {
               emit_printf(builder, string, fmt_args.data(), (uint32_t)fmt_args.size());
             }
@@ -109,7 +109,7 @@ run(SpirVModule &module) {
       else if (op.opcode == spv::OpExtInst && op.args.size() >= 4 &&
                get_ext_inst_import(op.args[2]) == EI_nonsemantic_shader_debuginfo_100) {
         if (op.args[3] == 35 /*DebugSource*/ && op.args.size() >= 5) {
-          _debug_source_files[op.args[1]] = op.args[4];
+          _debug_source_files[op.args[1]] = Id(op.args[4]);
         }
         else if (op.args[3] == 103 /*DebugLine*/ && op.args.size() >= 6) {
           auto it = _debug_source_files.find(op.args[4]);
@@ -117,27 +117,27 @@ run(SpirVModule &module) {
             _current_file = it->second;
             _current_line = op.args[5];
           } else {
-            _current_file = 0u;
+            _current_file = Id();
             _current_line = 0u;
           }
         }
         else if (op.args[3] == 104 /*DebugNoLine*/) {
-          _current_file = 0u;
+          _current_file = Id();
           _current_line = 0u;
         }
       }
       else if (op.opcode == spv::OpLine) {
-        _current_file = op.args[0];
+        _current_file = Id(op.args[0]);
         _current_line = op.args[1];
       }
       else if (op.opcode == spv::OpNoLine) {
-        _current_file = 0u;
+        _current_file = Id();
         _current_line = 0u;
       }
     }
   }
 
-  for (uint32_t import_id : deleted_imports) {
+  for (Id import_id : deleted_imports) {
     module.delete_id(import_id);
   }
 }
@@ -155,7 +155,7 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
 
   // Write a new string with vectors expanded.
   std::string new_fmt;
-  pvector<uint32_t> fmt_args;
+  pvector<Id> fmt_args;
   uint32_t arg_i = 0;
   const char *fmt = fmt_string.c_str();
   while (*fmt != 0) {
@@ -204,7 +204,7 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
       break;
     }
 
-    uint32_t arg = args[arg_i++];
+    Id arg(args[arg_i++]);
     if (module.get_kind(arg) == SpirVModule::IdKind::STRING) {
       //TODO: warn if fmt isn't %s
       new_fmt += module.resolve_string(arg);
@@ -309,14 +309,14 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
   uint32_t num_args = (uint32_t)fmt_args.size();
   uint32_t string_index = (uint32_t)_debug_info.intern_string(new_fmt);
 
-  uint32_t zero = get_uint_constant(0);
-  uint32_t one = get_uint_constant(1);
-  uint32_t reservation = get_uint_constant(num_args + 1);
+  Id zero = get_uint_constant(0);
+  Id one = get_uint_constant(1);
+  Id reservation = get_uint_constant(num_args + 1);
 
-  uint32_t counter_ptr = builder.op_access_chain(_buffer_block_var_id, {zero});
+  Id counter_ptr = builder.op_access_chain(_buffer_block_var_id, {zero});
 
-  uint32_t uint_type = module.define_type(ShaderType::UINT);
-  uint32_t offset = builder.allocate_id();
+  Id uint_type = module.define_type(ShaderType::UINT);
+  Id offset = builder.allocate_id();
 
   builder.insert(spv::OpAtomicIAdd, {uint_type, offset, counter_ptr, one, zero, reservation});
 
@@ -328,17 +328,17 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
   }
 
   // Get length of the data array in the SSBO
-  uint32_t length = builder.allocate_id();
+  Id length = builder.allocate_id();
   builder.insert(spv::OpArrayLength, {uint_type, length, _buffer_block_var_id, 1});
 
   // Bounds check to make sure we don't write outside the SSBO
-  uint32_t branch = builder.branch_if(builder.op_compare(spv::OpULessThanEqual, builder.op_add(offset, reservation), length));
+  Id branch = builder.branch_if(builder.op_compare(spv::OpULessThanEqual, builder.op_add(offset, reservation), length));
     // Store the string identifier (1-based)...
     builder.op_store(builder.op_access_chain(_buffer_block_var_id, {one, offset}), get_uint_constant(string_index + 1));
 
     // ...followed by the format arguments.
     for (uint32_t i = 0; i < (uint32_t)fmt_args.size(); ++i) {
-      uint32_t arg = fmt_args[i];
+      Id arg = fmt_args[i];
       if (module.get_type_id(arg) != uint_type) {
         // Bitcast to uint if it isn't already.
         arg = builder.op_bitcast(ShaderType::UINT, fmt_args[i]);
@@ -375,20 +375,20 @@ emit_assert(SpirVBuilder &builder, const std::string &expression) {
   // Write asserts to a special 4-word-sized section in the buffer: one per
   // unique assert, first one being a counter.  The remaining 3 fields are
   // used to store the invocation ID of the first occurrence.
-  uint32_t zero = get_uint_constant(0);
-  uint32_t one = get_uint_constant(1);
+  Id zero = get_uint_constant(0);
+  Id one = get_uint_constant(1);
 
-  uint32_t index = assert_id == 0 ? zero : get_uint_constant(assert_id * 4);
-  uint32_t counter_ptr = builder.op_access_chain(_buffer_block_var_id, {one, index});
+  Id index = assert_id == 0 ? zero : get_uint_constant(assert_id * 4);
+  Id counter_ptr = builder.op_access_chain(_buffer_block_var_id, {one, index});
 
-  uint32_t uint_type = module.define_type(ShaderType::UINT);
-  uint32_t result = builder.allocate_id();
+  Id uint_type = module.define_type(ShaderType::UINT);
+  Id result = builder.allocate_id();
   builder.insert(spv::OpAtomicIIncrement, {uint_type, result, counter_ptr, one, zero});
 
   // If we were the first occurrence, write the invocation ID as additional
   // helpful context information.
-  uint32_t branch = builder.branch_if(builder.op_compare(spv::OpIEqual, result, zero));
-    uint32_t invoc[3] = {0, 0, 0};
+  Id branch = builder.branch_if(builder.op_compare(spv::OpIEqual, result, zero));
+    Id invoc[3];
 
     switch (_stage) {
     case Shader::Stage::VERTEX:
@@ -416,8 +416,8 @@ emit_assert(SpirVBuilder &builder, const std::string &expression) {
     case Shader::Stage::TESS_EVALUATION:
       // Primitive ID, Tess coordinate x and y
       {
-        uint32_t primitive_id = module.ensure_builtin_input(spv::ExecutionModelTessellationEvaluation, spv::BuiltInPrimitiveId);
-        uint32_t tess_coord_id = module.ensure_builtin_input(spv::ExecutionModelTessellationEvaluation, spv::BuiltInTessCoord);
+        Id primitive_id = module.ensure_builtin_input(spv::ExecutionModelTessellationEvaluation, spv::BuiltInPrimitiveId);
+        Id tess_coord_id = module.ensure_builtin_input(spv::ExecutionModelTessellationEvaluation, spv::BuiltInTessCoord);
         invoc[0] = builder.op_bitcast(ShaderType::UINT, builder.op_load(primitive_id));
         invoc[1] = builder.op_bitcast(ShaderType::UINT, builder.op_load(builder.op_access_chain(tess_coord_id, {zero})));
         invoc[2] = builder.op_bitcast(ShaderType::UINT, builder.op_load(builder.op_access_chain(tess_coord_id, {one})));
@@ -427,8 +427,8 @@ emit_assert(SpirVBuilder &builder, const std::string &expression) {
     case Shader::Stage::FRAGMENT:
       // Fragment coordinate
       {
-        uint32_t frag_coord_id = module.ensure_builtin_input(spv::ExecutionModelFragment, spv::BuiltInFragCoord);
-        uint32_t two = get_uint_constant(2);
+        Id frag_coord_id = module.ensure_builtin_input(spv::ExecutionModelFragment, spv::BuiltInFragCoord);
+        Id two = get_uint_constant(2);
         invoc[0] = builder.op_bitcast(ShaderType::UINT, builder.op_load(builder.op_access_chain(frag_coord_id, {zero})));
         invoc[1] = builder.op_bitcast(ShaderType::UINT, builder.op_load(builder.op_access_chain(frag_coord_id, {one})));
         invoc[2] = builder.op_bitcast(ShaderType::UINT, builder.op_load(builder.op_access_chain(frag_coord_id, {two})));
@@ -438,7 +438,7 @@ emit_assert(SpirVBuilder &builder, const std::string &expression) {
     case Shader::Stage::COMPUTE:
       // Global invocation ID
       {
-        uint32_t value = builder.op_load(module.ensure_builtin_input(spv::ExecutionModelGLCompute, spv::BuiltInGlobalInvocationId));
+        Id value = builder.op_load(module.ensure_builtin_input(spv::ExecutionModelGLCompute, spv::BuiltInGlobalInvocationId));
         invoc[0] = builder.op_composite_extract(value, {0});
         invoc[1] = builder.op_composite_extract(value, {1});
         invoc[2] = builder.op_composite_extract(value, {2});
@@ -464,8 +464,8 @@ emit_assert(SpirVBuilder &builder, const std::string &expression) {
 void SpirVDebugOutputPass::
 define_buffer_block() {
   static const ShaderType *block_type = make_buffer_block_type();
-  uint32_t block_type_id = _module->define_type(block_type);
-  uint32_t block_var_id = _module->define_variable(block_type, spv::StorageClassUniform);
+  Id block_type_id = _module->define_type(block_type);
+  Id block_var_id = _module->define_variable(block_type, spv::StorageClassUniform);
 
   _module->decorate(block_type_id, spv::DecorationBufferBlock);
   _module->decorate(block_var_id, spv::DecorationBinding, _buffer_binding);

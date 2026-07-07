@@ -33,19 +33,19 @@ TEST_CASE("SpirVEmulateTextureQueriesPass replaces textureSize", "[shaderpipelin
   const ShaderType *ivec2_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_int, 2));
 
-  uint32_t id_tex = module.define_variable(sampler_type, spv::StorageClassUniformConstant);
+  Id id_tex = module.define_variable(sampler_type, spv::StorageClassUniformConstant);
   module.set_name(id_tex, "tex");
 
-  uint32_t id_sampled_image = module.unwrap_pointer_type(module.get_type_id(id_tex));
-  uint32_t id_image = module.get_type_id(id_sampled_image);
-  uint32_t id_ivec2 = module.define_type(ivec2_type);
-  uint32_t id_const_0 = module.define_int_constant(0);
+  Id id_sampled_image = module.unwrap_pointer_type(module.get_type_id(id_tex));
+  Id id_image = module.get_type_id(id_sampled_image);
+  Id id_ivec2 = module.define_type(ivec2_type);
+  Id id_const_0 = module.define_int_constant(0);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load = b.op_load(id_tex);
-    uint32_t img = b.allocate_id();
+    Id load = b.op_load(id_tex);
+    Id img = b.allocate_id();
     b.insert(spv::OpImage, {id_image, img, load});
     b.insert(spv::OpImageQuerySizeLod, {id_ivec2, b.allocate_id(), img, id_const_0});
   }
@@ -83,17 +83,17 @@ TEST_CASE("SpirVEmulateTextureQueriesPass emulates samplerCubeShadow", "[shaderp
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
   module.set_name(id_tex, "tex");
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load = b.op_load(id_tex);
+    Id load = b.op_load(id_tex);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load, id_coord, id_dref});
   }
@@ -139,24 +139,24 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube types (shadow last)", "[s
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
   module.set_name(id_tex0, "tex0");
-  uint32_t id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
   module.set_name(id_tex1, "tex1");
 
-  uint32_t id_sampled_image1 = module.unwrap_pointer_type(module.get_type_id(id_tex1));
+  Id id_sampled_image1 = module.unwrap_pointer_type(module.get_type_id(id_tex1));
   module.set_name(id_sampled_image1, "samplerCubeShadow");
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load0 = b.op_load(id_tex0);
+    Id load0 = b.op_load(id_tex0);
     b.op_image_sample(load0, id_coord);
-    uint32_t load1 = b.op_load(id_tex1);
+    Id load1 = b.op_load(id_tex1);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load1, id_coord, id_dref});
   }
@@ -217,22 +217,22 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube types (shadow first)", "[
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
   module.set_name(id_tex1, "tex1");
-  uint32_t id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
   module.set_name(id_tex0, "tex0");
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load1 = b.op_load(id_tex1);
+    Id load1 = b.op_load(id_tex1);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load1, id_coord, id_dref});
-    uint32_t load0 = b.op_load(id_tex0);
+    Id load0 = b.op_load(id_tex0);
     b.op_image_sample(load0, id_coord);
   }
 
@@ -280,32 +280,32 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes function signatures", "[shader
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
   module.set_name(id_tex0, "tex0");
-  uint32_t id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
   module.set_name(id_tex1, "tex1");
 
-  uint32_t id_ptr0 = module.get_type_id(id_tex0);
-  uint32_t id_ptr1 = module.get_type_id(id_tex1);
-  uint32_t id_sampled_image1 = module.unwrap_pointer_type(id_ptr1);
+  Id id_ptr0 = module.get_type_id(id_tex0);
+  Id id_ptr1 = module.get_type_id(id_tex1);
+  Id id_sampled_image1 = module.unwrap_pointer_type(id_ptr1);
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
   // There is no define helper for function types with parameters, so declare
   // the two float(sampler) types by hand.
-  uint32_t id_fnf_a = module.allocate_id();
+  Id id_fnf_a = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeFunction, {id_fnf_a, id_float, id_ptr0}));
-  uint32_t id_fnf_b = module.allocate_id();
+  Id id_fnf_b = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeFunction, {id_fnf_b, id_float, id_ptr1}));
 
   // float f(samplerCubeShadow p) { return texture(p, ...); }
-  uint32_t id_func = module.allocate_id();
-  uint32_t id_param = module.allocate_id();
-  uint32_t id_flabel = module.allocate_id();
-  uint32_t id_fload = module.allocate_id();
-  uint32_t id_fresult = module.allocate_id();
+  Id id_func = module.allocate_id();
+  Id id_param = module.allocate_id();
+  Id id_flabel = module.allocate_id();
+  Id id_fload = module.allocate_id();
+  Id id_fresult = module.allocate_id();
   {
     SpirVModule::Function fn;
     fn.id = id_func;
@@ -329,7 +329,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes function signatures", "[shader
   }
 
   // main() calls f(tex1).
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
     b.insert(spv::OpFunctionCall, {id_float, b.allocate_id(), id_func, id_tex1});
@@ -380,15 +380,15 @@ TEST_CASE("SpirVEmulateTextureQueriesPass leaves unaffected modules untouched", 
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
   module.set_name(id_tex, "tex");
 
-  uint32_t id_coord = module.define_null_constant(vec3_type);
+  Id id_coord = module.define_null_constant(vec3_type);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load = b.op_load(id_tex);
+    Id load = b.op_load(id_tex);
     b.op_image_sample(load, id_coord);
   }
 
@@ -413,33 +413,33 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes unknown-depth cube types", "[s
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
   module.set_name(id_tex0, "tex0");
 
   // No define helper produces a sampled image with an unknown-depth image
   // type, so declare that chain by hand.
   const ShaderType *image_type = ShaderType::register_type(ShaderType::Image(
     Texture::TT_cube_map, ShaderType::ST_float, ShaderType::Access::NONE));
-  uint32_t id_image1 = module.define_image_type(image_type, 2, 1, spv::ImageFormatUnknown);
-  uint32_t id_sampled_image1 = module.allocate_id();
+  Id id_image1 = module.define_image_type(image_type, 2, 1, spv::ImageFormatUnknown);
+  Id id_sampled_image1 = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeSampledImage,
                                              {id_sampled_image1, id_image1}));
-  uint32_t id_ptr1 = module.define_pointer_type(id_sampled_image1, spv::StorageClassUniformConstant);
-  uint32_t id_tex1 = module.allocate_id();
+  Id id_ptr1 = module.define_pointer_type(id_sampled_image1, spv::StorageClassUniformConstant);
+  Id id_tex1 = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpVariable,
     {id_ptr1, id_tex1, (uint32_t)spv::StorageClassUniformConstant}));
   module.set_name(id_tex1, "tex1");
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load0 = b.op_load(id_tex0);
+    Id load0 = b.op_load(id_tex0);
     b.op_image_sample(load0, id_coord);
-    uint32_t load1 = b.op_load(id_tex1);
+    Id load1 = b.op_load(id_tex1);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load1, id_coord, id_dref});
   }
@@ -479,27 +479,27 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube sampler arrays", "[shader
   const ShaderType *array1_type = ShaderType::register_type(
     ShaderType::Array(cube_sampler_type(true), 2));
 
-  uint32_t id_tex0 = module.define_variable(array0_type, spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(array0_type, spv::StorageClassUniformConstant);
   module.set_name(id_tex0, "tex0");
-  uint32_t id_tex1 = module.define_variable(array1_type, spv::StorageClassUniformConstant);
+  Id id_tex1 = module.define_variable(array1_type, spv::StorageClassUniformConstant);
   module.set_name(id_tex1, "tex1");
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
-  uint32_t id_const_0 = module.define_int_constant(0);
-  uint32_t id_const_1 = module.define_int_constant(1);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
+  Id id_const_0 = module.define_int_constant(0);
+  Id id_const_1 = module.define_int_constant(1);
 
   uint32_t id_ptr_si0;
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t chain0 = b.op_access_chain(id_tex0, {id_const_0});
+    Id chain0 = b.op_access_chain(id_tex0, {id_const_0});
     id_ptr_si0 = module.get_type_id(chain0);
-    uint32_t load0 = b.op_load(chain0);
+    Id load0 = b.op_load(chain0);
     b.op_image_sample(load0, id_coord);
-    uint32_t chain1 = b.op_access_chain(id_tex1, {id_const_1});
-    uint32_t load1 = b.op_load(chain1);
+    Id chain1 = b.op_access_chain(id_tex1, {id_const_1});
+    Id load1 = b.op_load(chain1);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load1, id_coord, id_dref});
   }
@@ -558,22 +558,22 @@ TEST_CASE("SpirVEmulateTextureQueriesPass removes decorations of replaced types"
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
-  uint32_t id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
 
-  uint32_t id_sampled_image0 = module.unwrap_pointer_type(module.get_type_id(id_tex0));
-  uint32_t id_sampled_image1 = module.unwrap_pointer_type(module.get_type_id(id_tex1));
+  Id id_sampled_image0 = module.unwrap_pointer_type(module.get_type_id(id_tex0));
+  Id id_sampled_image1 = module.unwrap_pointer_type(module.get_type_id(id_tex1));
   module.decorate(id_sampled_image1, spv::DecorationRelaxedPrecision);
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
     b.op_load(id_tex0);
-    uint32_t load1 = b.op_load(id_tex1);
+    Id load1 = b.op_load(id_tex1);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load1, id_coord, id_dref});
   }
@@ -606,19 +606,19 @@ TEST_CASE("SpirVEmulateTextureQueriesPass composes with variable removal", "[sha
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
+  Id id_tex0 = module.define_variable(cube_sampler_type(false), spv::StorageClassUniformConstant);
   module.set_name(id_tex0, "tex0");
-  uint32_t id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex1 = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
   module.set_name(id_tex1, "tex1");
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load1 = b.op_load(id_tex1);
+    Id load1 = b.op_load(id_tex1);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load1, id_coord, id_dref});
   }
@@ -659,23 +659,23 @@ TEST_CASE("SpirVEmulateTextureQueriesPass combines shadow and query emulation", 
   const ShaderType *vec3_type = ShaderType::register_type(
     ShaderType::Vector(ShaderType::ST_float, 3));
 
-  uint32_t id_tex = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
+  Id id_tex = module.define_variable(cube_sampler_type(true), spv::StorageClassUniformConstant);
   module.set_name(id_tex, "tex");
 
-  uint32_t id_sampled_image = module.unwrap_pointer_type(module.get_type_id(id_tex));
-  uint32_t id_image = module.get_type_id(id_sampled_image);
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_int = module.define_type(ShaderType::INT);
-  uint32_t id_coord = module.define_null_constant(vec3_type);
-  uint32_t id_dref = module.define_float_constant(0.5f);
+  Id id_sampled_image = module.unwrap_pointer_type(module.get_type_id(id_tex));
+  Id id_image = module.get_type_id(id_sampled_image);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_int = module.define_type(ShaderType::INT);
+  Id id_coord = module.define_null_constant(vec3_type);
+  Id id_dref = module.define_float_constant(0.5f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
-    uint32_t load = b.op_load(id_tex);
+    Id load = b.op_load(id_tex);
     b.insert(spv::OpImageSampleDrefImplicitLod,
              {id_float, b.allocate_id(), load, id_coord, id_dref});
-    uint32_t img = b.allocate_id();
+    Id img = b.allocate_id();
     b.insert(spv::OpImage, {id_image, img, load});
     b.insert(spv::OpImageQueryLevels, {id_int, b.allocate_id(), img});
   }

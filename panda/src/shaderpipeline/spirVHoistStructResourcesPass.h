@@ -31,22 +31,22 @@ private:
   void process_globals(SpirVModule &module);
   void process_function(SpirVModule &module, Function &function);
 
-  INLINE bool is_deleted(uint32_t id) const {
+  INLINE bool is_deleted(SpirVId id) const {
     return _deleted.count(id) != 0;
   }
 
-  uint32_t get_original_member_type_id(SpirVModule &module, uint32_t struct_id, uint32_t index) const;
+  SpirVId get_original_member_type_id(SpirVModule &module, SpirVId struct_id, uint32_t index) const;
 
   // Remove structs that became empty due to only containing resources.
   const bool _remove_empty_structs;
 
   // Which type we need to hoist.
-  pset<uint32_t> _hoist_types;
+  pset<SpirVId> _hoist_types;
 
   // Ids whose declarations serve no further purpose.  The deletion is
   // applied at the end of the pass, so that the declarations remain
   // queryable while the function bodies are being rewritten.
-  pset<uint32_t> _deleted;
+  pset<SpirVId> _deleted;
 
   // Structs (and arrays thereof) that lost all their members because they
   // contained only resources.  Only used when _remove_empty_structs is false:
@@ -54,25 +54,25 @@ private:
   // enclosing struct (where removing it would change the member numbering),
   // but pointers, variables and function parameters of these types serve no
   // further purpose and are removed.
-  pset<uint32_t> _emptied_structs;
+  pset<SpirVId> _emptied_structs;
 
   // For each modified struct, a snapshot of its original member type ids
   // (the module's own member lists shrink as members are deleted), plus the
   // map from original member index to post-deletion index (-1 if deleted).
-  pmap<uint32_t, pvector<uint32_t> > _original_members;
-  pmap<uint32_t, pvector<int> > _member_remap;
+  pmap<SpirVId, pvector<SpirVId> > _original_members;
+  pmap<SpirVId, pvector<int> > _member_remap;
 
   // This stores the type IDs of all the types that (indirectly) contain the
   // type we want to unpack.  For each affected struct, access chains (struct
   // members only) leading to the hoisted type in question, as well as the
   // type that the wrapped additional variables should have.
-  pmap<uint32_t, pvector<std::pair<const ShaderType *, AccessChain> > > _affected_types;
-  pset<uint32_t> _affected_pointer_types;
+  pmap<SpirVId, pvector<std::pair<const ShaderType *, AccessChain> > > _affected_types;
+  pset<SpirVId> _affected_pointer_types;
 
 public:
   // For each access chain consisting only of struct members
   // (prefixed by a variable id), map to the variable that has been hoisted
-  pmap<AccessChain, uint32_t> _hoisted_vars;
+  pmap<AccessChain, SpirVId> _hoisted_vars;
 };
 
 #endif

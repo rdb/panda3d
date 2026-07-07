@@ -45,23 +45,23 @@ private:
   };
 
   INLINE ExtInstImport get_ext_inst_import(uint32_t id) const;
-  INLINE uint32_t get_uint_constant(uint32_t v);
+  INLINE SpirVId get_uint_constant(uint32_t v);
 
 private:
   Shader::Stage _stage;
   uint32_t _buffer_binding = 0u;
   uint32_t _buffer_set = 0u;
-  uint32_t _buffer_block_var_id = 0u;
+  SpirVId _buffer_block_var_id;
 
   Shader::DebugInfo &_debug_info;
 
   SpirVModule *_module = nullptr;
 
-  pvector<uint32_t> _numbers;
+  pvector<SpirVId> _numbers;
   pmap<uint32_t, ExtInstImport> _ext_inst_imports;
-  pmap<uint32_t, uint32_t> _debug_source_files;
+  pmap<uint32_t, SpirVId> _debug_source_files;
 
-  uint32_t _current_file = 0;
+  SpirVId _current_file;
   uint32_t _current_line = 0;
 };
 

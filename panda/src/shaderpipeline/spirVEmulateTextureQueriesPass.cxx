@@ -26,25 +26,23 @@ run(SpirVModule &module) {
     // must become regular, non-depth cube image types.  Any sampled image
     // and pointer types that consequently become duplicates are merged by
     // the deduplication that runs after the pass.
-    pvector<std::pair<uint32_t, uint32_t> > replacements;
+    pvector<std::pair<Id, Id> > replacements;
 
-    // Walk by index, since defining the replacement types appends to the
-    // globals section we are iterating.
-    size_t num_globals = module.get_globals().size();
-    for (size_t i = 0; i < num_globals; ++i) {
-      // Copy, since the appends may invalidate references.
-      Instruction op = module.get_globals()[i];
-      if (op.opcode == spv::OpTypeImage && op.args.size() >= 8 &&
-          op.args[2] == spv::DimCube && op.args[3] > 0) {
-        uint32_t new_id = module.define_image_type(
-          module.resolve_type(op.args[0]), 0, op.args[6],
-          (spv::ImageFormat)op.args[7]);
+    // The cursor visits only the original declarations, unaffected by the
+    // replacement types being appended during the walk.
+    SpirVGlobalsCursor cursor(module);
+    while (cursor.next()) {
+      if (cursor->opcode == spv::OpTypeImage && cursor->args.size() >= 8 &&
+          cursor->args[2] == spv::DimCube && cursor->args[3] > 0) {
+        Id new_id = module.define_image_type(
+          module.resolve_type(Id(cursor->args[0])), 0, cursor->args[6],
+          (spv::ImageFormat)cursor->args[7]);
         nassertd(new_id != 0) continue;
-        replacements.push_back(std::make_pair(op.args[0], new_id));
+        replacements.push_back(std::make_pair(Id(cursor->args[0]), new_id));
       }
     }
-    // Apply afterwards, since define_image_type appends to the globals we
-    // are iterating.
+    // Apply afterwards, so that the walk above cannot encounter a rewritten
+    // declaration.
     for (const auto &item : replacements) {
       module.replace_type_id(item.first, item.second);
     }
@@ -52,7 +50,8 @@ run(SpirVModule &module) {
 
   if (_emulate_caps & (Shader::C_image_query_size | Shader::C_texture_query_size | Shader::C_texture_query_levels)) {
     SpirVUsageAnalysis usage(module);
-    for (uint32_t id = 0; id < module.get_id_bound(); ++id) {
+    for (uint32_t word = 0; word < module.get_id_bound(); ++word) {
+      Id id(word);
       if (module.get_kind(id) == IdKind::VARIABLE &&
           usage.was_size_or_levels_queried(id)) {
         _access_chains.insert({id, AccessChain(id)});
@@ -68,20 +67,20 @@ run(SpirVModule &module) {
       case spv::OpAccessChain:
       case spv::OpInBoundsAccessChain:
         if (op.args.size() >= 4) {
-          auto it = _access_chains.find(op.args[2]);
+          auto it = _access_chains.find(Id(op.args[2]));
           if (it == _access_chains.end()) {
             break;
           }
           AccessChain chain = it->second;
-          uint32_t parent_id = module.unwrap_pointer_type(module.get_type_id(op.args[2]));
+          Id parent_id = module.unwrap_pointer_type(module.get_type_id(Id(op.args[2])));
 
           bool constant_chain = true;
           for (size_t ai = 3; ai < op.args.size(); ++ai) {
-            if (module.get_kind(op.args[ai]) != IdKind::CONSTANT) {
+            if (module.get_kind(Id(op.args[ai])) != IdKind::CONSTANT) {
               constant_chain = false;
               break;
             }
-            uint32_t index = module.resolve_constant(op.args[ai]);
+            uint32_t index = module.resolve_constant(Id(op.args[ai]));
             chain.append(index);
 
             const Instruction *type_decl = module.get_decl(parent_id);
@@ -90,11 +89,11 @@ run(SpirVModule &module) {
               parent_id = module.get_composite_member_type_id(parent_id, index);
             } else { // array
               parent_id = module.get_composite_member_type_id(parent_id, 0);
-              nassertd(parent_id > 0) break;
+              nassertd(parent_id != 0) break;
             }
           }
           if (constant_chain) {
-            _access_chains.insert({op.args[1], std::move(chain)});
+            _access_chains.insert({Id(op.args[1]), std::move(chain)});
           }
         }
         break;
@@ -106,15 +105,19 @@ run(SpirVModule &module) {
       case spv::OpImage:
       case spv::OpSampledImage:
         if (op.args.size() >= 3) {
-          auto it = _access_chains.find(op.args[2]);
+          auto it = _access_chains.find(Id(op.args[2]));
           if (it != _access_chains.end()) {
-            _access_chains.insert({op.args[1], it->second});
+            _access_chains.insert({Id(op.args[1]), it->second});
           }
         }
         break;
 
       case spv::OpImageSampleDrefImplicitLod:
       case spv::OpImageSampleDrefExplicitLod:
+        // NOTE: this rewrites *every* Dref sample when the cube shadow cap
+        // is being emulated, not just those sampling a cube map; a shader
+        // mixing sampler2DShadow and samplerCubeShadow gets its 2D shadow
+        // lookups emulated as well.  To be narrowed to cube samplers.
         if (_emulate_caps & Shader::C_sampler_cube_shadow) {
           if (_float_one_id == 0) {
             _float_one_id = module.define_float_constant(1.0f);
@@ -127,13 +130,13 @@ run(SpirVModule &module) {
           // reference.
           Instruction orig = op;
 
-          cursor.replace([&](SpirVBuilder &builder) -> uint32_t {
-            uint32_t sample = builder.op_image_sample(
-              orig.args[2], orig.args[3],
+          cursor.replace([&](SpirVBuilder &builder) -> Id {
+            Id sample = builder.op_image_sample(
+              Id(orig.args[2]), Id(orig.args[3]),
               orig.args.size() >= 6 ? orig.args[5] : 0u,
               orig.args.size() > 6 ? orig.args.data() + 6 : nullptr);
-            uint32_t depth = builder.op_composite_extract(sample, {0});
-            uint32_t cmp = builder.op_compare(spv::OpFOrdGreaterThan, depth, orig.args[4]);
+            Id depth = builder.op_composite_extract(sample, {0});
+            Id cmp = builder.op_compare(spv::OpFOrdGreaterThan, depth, Id(orig.args[4]));
             return builder.op_select(cmp, _float_one_id, _float_zero_id);
           });
         }
@@ -152,21 +155,21 @@ run(SpirVModule &module) {
             break;
           }
 
-          auto acit = _access_chains.find(op.args[2]);
+          auto acit = _access_chains.find(Id(op.args[2]));
           if (acit == _access_chains.end()) {
             break;
           }
           const AccessChain &chain = acit->second;
 
           if (op.opcode == spv::OpImageQuerySizeLod && op.args.size() >= 4) {
-            if (module.get_kind(op.args[3]) != IdKind::CONSTANT ||
-                module.resolve_constant(op.args[3]) != 0) {
+            if (module.get_kind(Id(op.args[3])) != IdKind::CONSTANT ||
+                module.resolve_constant(Id(op.args[3])) != 0) {
               // Can't handle a non-zero level of detail parameter.
               break;
             }
           }
 
-          uint32_t size_var_id;
+          Id size_var_id;
           auto it = _size_var_ids.find(chain);
           if (it != _size_var_ids.end()) {
             size_var_id = it->second;
@@ -179,7 +182,7 @@ run(SpirVModule &module) {
 
           // Copy what we need before inserting anything.
           spv::Op query_opcode = op.opcode;
-          uint32_t result_type_id = op.args[0];
+          Id result_type_id(op.args[0]);
 
           const ShaderType *result_type = module.resolve_type(result_type_id);
           if (query_opcode != spv::OpImageQueryLevels &&
@@ -188,8 +191,8 @@ run(SpirVModule &module) {
             nassertd(false) break;
           }
 
-          cursor.replace([&](SpirVBuilder &builder) -> uint32_t {
-            uint32_t temp = builder.op_load(size_var_id);
+          cursor.replace([&](SpirVBuilder &builder) -> Id {
+            Id temp = builder.op_load(size_var_id);
 
             // Grab the components we need out of the vec4 size variable.
             if (query_opcode == spv::OpImageQueryLevels) {

@@ -36,18 +36,20 @@ public:
   using EntryPoint = SpirVModule::EntryPoint;
   using IdKind = SpirVModule::IdKind;
   using Args = SpirVModule::Args;
+  using Id = SpirVId;
 
   virtual ~SpirVTransformPass() = default;
 
   virtual void run(SpirVModule &module) = 0;
 
   /**
-   * Helper class for storing a chain of member or array accesses.
+   * Helper class for storing a chain of member or array accesses.  The
+   * chain elements are literal member indices, not ids.
    */
   class AccessChain {
   public:
-    AccessChain(uint32_t var_id) : _var_id(var_id) {}
-    AccessChain(uint32_t var_id, std::initializer_list<uint32_t> chain) : _var_id(var_id), _chain(std::move(chain)) {}
+    explicit AccessChain(SpirVId var_id) : _var_id(var_id) {}
+    AccessChain(SpirVId var_id, std::initializer_list<uint32_t> chain) : _var_id(var_id), _chain(std::move(chain)) {}
 
     INLINE void prepend(uint32_t id);
     INLINE void append(uint32_t id);
@@ -62,7 +64,7 @@ public:
     INLINE void output(std::ostream &out) const;
 
   public:
-    uint32_t _var_id;
+    SpirVId _var_id;
     pvector<uint32_t> _chain;
   };
 

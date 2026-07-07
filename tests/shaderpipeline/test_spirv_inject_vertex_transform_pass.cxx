@@ -22,22 +22,22 @@ TEST_CASE("SpirVInjectVertexTransformPass injects transforms", "[shaderpipeline]
   const ShaderType *vec4_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
   const ShaderType *mat4_type = ShaderType::register_type(ShaderType::Matrix(ShaderType::ST_float, 4, 4));
 
-  uint32_t id_vertex = module.define_variable(vec4_type, spv::StorageClassInput);
+  Id id_vertex = module.define_variable(vec4_type, spv::StorageClassInput);
   module.decorate(id_vertex, spv::DecorationLocation, 0u);
   module.set_name(id_vertex, "vertex");
 
-  uint32_t id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
+  Id id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
   module.decorate(id_out, spv::DecorationLocation, 0u);
 
-  uint32_t id_mv = module.define_variable(mat4_type, spv::StorageClassUniformConstant);
+  Id id_mv = module.define_variable(mat4_type, spv::StorageClassUniformConstant);
   module.set_name(id_mv, "p3d_ModelViewMatrix");
 
-  uint32_t id_main = add_main(module, spv::ExecutionModelVertex, {id_vertex, id_out});
+  Id id_main = add_main(module, spv::ExecutionModelVertex, {id_vertex, id_out});
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
-    uint32_t load_mat = builder.op_load(id_mv);
-    uint32_t load_vtx = builder.op_load(id_vertex);
-    uint32_t xformed = builder.op_multiply(load_mat, load_vtx);
+    Id load_mat = builder.op_load(id_mv);
+    Id load_vtx = builder.op_load(id_vertex);
+    Id xformed = builder.op_multiply(load_mat, load_vtx);
     builder.op_store(id_out, xformed);
   }
 

@@ -31,38 +31,40 @@
  */
 class EXPCL_PANDA_SHADERPIPELINE SpirVUsageAnalysis {
 public:
+  using Id = SpirVId;
+
   explicit SpirVUsageAnalysis(const SpirVModule &module);
 
   // Returns the id of the variable or function parameter that the given
   // (pointer or image) value originates from, chased through loads, access
   // chains, copies and casts.  A variable originates from itself.  Returns 0
   // if the value does not trace back to one.
-  INLINE uint32_t get_origin(uint32_t id) const;
+  INLINE SpirVId get_origin(SpirVId id) const;
 
   // For a variable or function parameter: true if its value is loaded,
   // stored, passed to a function, or otherwise consumed.  For a function:
   // true if it is called at least once.
-  INLINE bool is_used(uint32_t id) const;
+  INLINE bool is_used(SpirVId id) const;
 
   // For a variable: true if a sampling operation with (respectively without)
   // depth comparison traces back to it.
-  INLINE bool is_dref_sampled(uint32_t var_id) const;
-  INLINE bool is_non_dref_sampled(uint32_t var_id) const;
+  INLINE bool is_dref_sampled(SpirVId var_id) const;
+  INLINE bool is_non_dref_sampled(SpirVId var_id) const;
 
   // For a variable: true if an access chain that traces back to it uses an
   // index that is not a constant expression.
-  INLINE bool is_dynamically_indexed(uint32_t var_id) const;
+  INLINE bool is_dynamically_indexed(SpirVId var_id) const;
 
   // For a variable: true if the size or level count of an image loaded from
   // it was queried.
-  INLINE bool was_size_or_levels_queried(uint32_t var_id) const;
+  INLINE bool was_size_or_levels_queried(SpirVId var_id) const;
 
   // For a value: true if it was extracted from a sampled image (via OpImage),
   // as opposed to being loaded from a plain (storage) image.
-  INLINE bool is_sampled_image_value(uint32_t id) const;
+  INLINE bool is_sampled_image_value(SpirVId id) const;
 
   // For a value: true if it can be evaluated at compile time.
-  INLINE bool is_constant_expression(uint32_t id) const;
+  INLINE bool is_constant_expression(SpirVId id) const;
 
 private:
   enum UsageFlags {
@@ -75,14 +77,14 @@ private:
     UF_queried_size_levels = 1 << 6,
   };
 
-  INLINE bool has_flag(uint32_t id, int flag) const;
-  INLINE void set_flag(uint32_t id, int flag);
-  INLINE void set_origin(uint32_t id, uint32_t origin);
-  INLINE void mark_used(uint32_t id);
-  INLINE void set_origin_flag(uint32_t id, int flag);
+  INLINE bool has_flag(SpirVId id, int flag) const;
+  INLINE void set_flag(SpirVId id, int flag);
+  INLINE void set_origin(SpirVId id, SpirVId origin);
+  INLINE void mark_used(SpirVId id);
+  INLINE void set_origin_flag(SpirVId id, int flag);
 
   pvector<uint8_t> _flags;
-  pvector<uint32_t> _origins;
+  pvector<SpirVId> _origins;
 };
 
 #include "spirVUsageAnalysis.I"

@@ -20,16 +20,16 @@ TEST_CASE("SpirVReplaceVariableTypePass converts loads to the old type", "[shade
   // uniform float u; out float o;  main() { o = u; }
   SpirVModule module = make_module();
 
-  uint32_t id_var = module.define_variable(ShaderType::FLOAT, spv::StorageClassUniformConstant);
+  Id id_var = module.define_variable(ShaderType::FLOAT, spv::StorageClassUniformConstant);
   module.set_name(id_var, "u");
 
-  uint32_t id_out = module.define_variable(ShaderType::FLOAT, spv::StorageClassOutput);
+  Id id_out = module.define_variable(ShaderType::FLOAT, spv::StorageClassOutput);
   module.decorate(id_out, spv::DecorationLocation, 0u);
 
-  uint32_t main_id = add_main(module, spv::ExecutionModelFragment, {id_out});
+  Id main_id = add_main(module, spv::ExecutionModelFragment, {id_out});
   {
     SpirVBuilder builder = builder_before_return(module, main_id);
-    uint32_t id_value = builder.op_load(id_var);
+    Id id_value = builder.op_load(id_var);
     builder.op_store(id_out, id_value);
   }
 
@@ -74,16 +74,16 @@ TEST_CASE("SpirVReplaceVariableTypePass replicates a scalar to a vector", "[shad
   const ShaderType *vec4_type =
     ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
 
-  uint32_t id_var = module.define_variable(vec4_type, spv::StorageClassUniformConstant);
+  Id id_var = module.define_variable(vec4_type, spv::StorageClassUniformConstant);
   module.set_name(id_var, "u");
 
-  uint32_t id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
+  Id id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
   module.decorate(id_out, spv::DecorationLocation, 0u);
 
-  uint32_t main_id = add_main(module, spv::ExecutionModelFragment, {id_out});
+  Id main_id = add_main(module, spv::ExecutionModelFragment, {id_out});
   {
     SpirVBuilder builder = builder_before_return(module, main_id);
-    uint32_t id_value = builder.op_load(id_var);
+    Id id_value = builder.op_load(id_var);
     builder.op_store(id_out, id_value);
   }
 

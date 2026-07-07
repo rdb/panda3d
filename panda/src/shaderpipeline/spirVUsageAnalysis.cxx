@@ -22,20 +22,22 @@ SpirVUsageAnalysis::
 SpirVUsageAnalysis(const SpirVModule &module) {
   uint32_t bound = module.get_id_bound();
   _flags.resize(bound, 0);
-  _origins.resize(bound, 0);
+  _origins.resize(bound, SpirVId());
 
   // Seed the module-scope state: variables and parameters originate from
-  // themselves, constants are constant expressions.
-  for (uint32_t id = 0; id < bound; ++id) {
+  // themselves, constants (including spec constants and spec constant
+  // expressions) are constant expressions.
+  for (uint32_t word = 0; word < bound; ++word) {
+    SpirVId id(word);
     switch (module.get_kind(id)) {
     case SpirVModule::IdKind::VARIABLE:
     case SpirVModule::IdKind::PARAMETER:
-      _origins[id] = id;
+      _origins[word] = id;
       break;
 
     case SpirVModule::IdKind::CONSTANT:
     case SpirVModule::IdKind::SPEC_CONSTANT:
-      _flags[id] |= UF_constant_expression;
+      _flags[word] |= UF_constant_expression;
       break;
 
     default:
@@ -78,8 +80,8 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpCooperativeMatrixLoadKHR:
         // Loading through a pointer makes its variable used.
         if (op.args.size() >= 3) {
-          set_origin(op.args[1], get_origin(op.args[2]));
-          mark_used(op.args[1]);
+          set_origin(SpirVId(op.args[1]), get_origin(SpirVId(op.args[2])));
+          mark_used(SpirVId(op.args[1]));
         }
         break;
 
@@ -89,15 +91,15 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpCooperativeMatrixStoreKHR:
         // A write creates no result id, but the variable counts as used.
         if (!op.args.empty()) {
-          mark_used(op.args[0]);
+          mark_used(SpirVId(op.args[0]));
         }
         break;
 
       case spv::OpCopyMemory:
       case spv::OpCopyMemorySized:
         if (op.args.size() >= 2) {
-          mark_used(op.args[0]);
-          mark_used(op.args[1]);
+          mark_used(SpirVId(op.args[0]));
+          mark_used(SpirVId(op.args[1]));
         }
         break;
 
@@ -108,14 +110,14 @@ SpirVUsageAnalysis(const SpirVModule &module) {
         // Chains propagate their base variable, so that a load through them
         // can transitively mark it used.
         if (op.args.size() >= 3) {
-          set_origin(op.args[1], get_origin(op.args[2]));
+          set_origin(SpirVId(op.args[1]), get_origin(SpirVId(op.args[2])));
 
           // If one of the indices (including the base element for
           // OpPtrAccessChain) isn't a constant expression, the variable is
           // dynamically indexed.
           for (size_t i = 3; i < op.args.size(); ++i) {
-            if (!has_flag(op.args[i], UF_constant_expression)) {
-              set_origin_flag(op.args[1], UF_dynamically_indexed);
+            if (!has_flag(SpirVId(op.args[i]), UF_constant_expression)) {
+              set_origin_flag(SpirVId(op.args[1]), UF_dynamically_indexed);
               break;
             }
           }
@@ -125,14 +127,14 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpImageTexelPointer:
       case spv::OpSampledImage:
         if (op.args.size() >= 3) {
-          set_origin(op.args[1], get_origin(op.args[2]));
+          set_origin(SpirVId(op.args[1]), get_origin(SpirVId(op.args[2])));
         }
         break;
 
       case spv::OpImage:
         if (op.args.size() >= 3) {
-          set_origin(op.args[1], get_origin(op.args[2]));
-          set_flag(op.args[1], UF_sampled_image);
+          set_origin(SpirVId(op.args[1]), get_origin(SpirVId(op.args[2])));
+          set_flag(SpirVId(op.args[1]), UF_sampled_image);
         }
         break;
 
@@ -144,7 +146,7 @@ SpirVUsageAnalysis(const SpirVModule &module) {
         // origin, only the flags; composites of pointers do not occur.)
         if (op.args.size() >= 3) {
           if (op.opcode != spv::OpCompositeExtract) {
-            set_origin(op.args[1], get_origin(op.args[2]));
+            set_origin(SpirVId(op.args[1]), get_origin(SpirVId(op.args[2])));
           }
           if (op.args[2] < _flags.size()) {
             _flags[op.args[1]] |= _flags[op.args[2]] &
@@ -155,13 +157,13 @@ SpirVUsageAnalysis(const SpirVModule &module) {
 
       case spv::OpBitcast:
         if (op.args.size() >= 3) {
-          set_origin(op.args[1], get_origin(op.args[2]));
-          if (has_flag(op.args[2], UF_constant_expression)) {
-            set_flag(op.args[1], UF_constant_expression);
+          set_origin(SpirVId(op.args[1]), get_origin(SpirVId(op.args[2])));
+          if (has_flag(SpirVId(op.args[2]), UF_constant_expression)) {
+            set_flag(SpirVId(op.args[1]), UF_constant_expression);
           }
           // Casting to a non-pointer type counts as a load.
-          if (module.get_kind(op.args[0]) != SpirVModule::IdKind::POINTER_TYPE) {
-            mark_used(op.args[1]);
+          if (module.get_kind(SpirVId(op.args[0])) != SpirVModule::IdKind::POINTER_TYPE) {
+            mark_used(SpirVId(op.args[1]));
           }
         }
         break;
@@ -171,12 +173,12 @@ SpirVUsageAnalysis(const SpirVModule &module) {
         // enough to only mark the arguments used if the relevant parameters
         // are used within the function itself.
         for (size_t i = 3; i < op.args.size(); ++i) {
-          mark_used(op.args[i]);
+          mark_used(SpirVId(op.args[i]));
         }
         // Mark the function as used (even if its return value is unused -
         // the function may have side effects).
         if (op.args.size() >= 3) {
-          set_flag(op.args[2], UF_used);
+          set_flag(SpirVId(op.args[2]), UF_used);
         }
         break;
 
@@ -187,19 +189,19 @@ SpirVUsageAnalysis(const SpirVModule &module) {
           case GLSLstd450Modf:
           case GLSLstd450Frexp:
             if (op.args.size() >= 6) {
-              mark_used(op.args[5]);
+              mark_used(SpirVId(op.args[5]));
             }
             break;
 
           case GLSLstd450InterpolateAtCentroid:
-            mark_used(op.args[4]);
+            mark_used(SpirVId(op.args[4]));
             break;
 
           case GLSLstd450InterpolateAtSample:
           case GLSLstd450InterpolateAtOffset:
-            mark_used(op.args[4]);
+            mark_used(SpirVId(op.args[4]));
             if (op.args.size() >= 6) {
-              mark_used(op.args[5]);
+              mark_used(SpirVId(op.args[5]));
             }
             break;
           }
@@ -219,7 +221,7 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpImageSparseFetch:
       case spv::OpImageSparseGather:
         if (op.args.size() >= 3) {
-          set_origin_flag(op.args[2], UF_non_dref_sampled);
+          set_origin_flag(SpirVId(op.args[2]), UF_non_dref_sampled);
         }
         break;
 
@@ -234,7 +236,7 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpImageSparseSampleProjDrefExplicitLod:
       case spv::OpImageSparseDrefGather:
         if (op.args.size() >= 3) {
-          set_origin_flag(op.args[2], UF_dref_sampled);
+          set_origin_flag(SpirVId(op.args[2]), UF_dref_sampled);
         }
         break;
 
@@ -242,26 +244,26 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpImageQuerySize:
       case spv::OpImageQueryLevels:
         if (op.args.size() >= 3) {
-          set_origin_flag(op.args[2], UF_queried_size_levels);
+          set_origin_flag(SpirVId(op.args[2]), UF_queried_size_levels);
         }
         break;
 
       case spv::OpArrayLength:
       case spv::OpConvertPtrToU:
         if (op.args.size() >= 3) {
-          mark_used(op.args[2]);
+          mark_used(SpirVId(op.args[2]));
         }
         break;
 
       case spv::OpSelect:
         // This can in theory operate on pointers, which is why we handle it.
         if (op.args.size() >= 5) {
-          mark_used(op.args[3]);
-          mark_used(op.args[4]);
-          if (has_flag(op.args[2], UF_constant_expression) &&
-              has_flag(op.args[3], UF_constant_expression) &&
-              has_flag(op.args[4], UF_constant_expression)) {
-            set_flag(op.args[1], UF_constant_expression);
+          mark_used(SpirVId(op.args[3]));
+          mark_used(SpirVId(op.args[4]));
+          if (has_flag(SpirVId(op.args[2]), UF_constant_expression) &&
+              has_flag(SpirVId(op.args[3]), UF_constant_expression) &&
+              has_flag(SpirVId(op.args[4]), UF_constant_expression)) {
+            set_flag(SpirVId(op.args[1]), UF_constant_expression);
           }
         }
         break;
@@ -269,7 +271,7 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpReturnValue:
         // A pointer can be returned when certain caps are present.
         if (!op.args.empty()) {
-          mark_used(op.args[0]);
+          mark_used(SpirVId(op.args[0]));
         }
         break;
 
@@ -279,8 +281,8 @@ SpirVUsageAnalysis(const SpirVModule &module) {
         // Consider a variable "used" if its pointer value is being compared,
         // to be on the safe side.
         if (op.args.size() >= 4) {
-          mark_used(op.args[2]);
-          mark_used(op.args[3]);
+          mark_used(SpirVId(op.args[2]));
+          mark_used(SpirVId(op.args[3]));
         }
         break;
 
@@ -306,8 +308,8 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpConvertFToBF16INTEL:
       case spv::OpConvertBF16ToFINTEL:
         if (op.args.size() >= 3 &&
-            has_flag(op.args[2], UF_constant_expression)) {
-          set_flag(op.args[1], UF_constant_expression);
+            has_flag(SpirVId(op.args[2]), UF_constant_expression)) {
+          set_flag(SpirVId(op.args[1]), UF_constant_expression);
         }
         break;
 
@@ -344,9 +346,9 @@ SpirVUsageAnalysis(const SpirVModule &module) {
       case spv::OpBitwiseXor:
       case spv::OpBitwiseAnd:
         if (op.args.size() >= 4 &&
-            has_flag(op.args[2], UF_constant_expression) &&
-            has_flag(op.args[3], UF_constant_expression)) {
-          set_flag(op.args[1], UF_constant_expression);
+            has_flag(SpirVId(op.args[2]), UF_constant_expression) &&
+            has_flag(SpirVId(op.args[3]), UF_constant_expression)) {
+          set_flag(SpirVId(op.args[1]), UF_constant_expression);
         }
         break;
 

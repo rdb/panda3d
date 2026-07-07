@@ -27,10 +27,10 @@ get_ext_inst_import(uint32_t id) const {
 /**
  *
  */
-INLINE uint32_t SpirVDebugOutputPass::
+INLINE SpirVId SpirVDebugOutputPass::
 get_uint_constant(uint32_t v) {
   if (v >= _numbers.size()) {
-    _numbers.resize(v + 1, 0u);
+    _numbers.resize(v + 1, SpirVId());
   }
   if (_numbers[v] == 0u) {
     _numbers[v] = _module->define_constant(ShaderType::UINT, v);

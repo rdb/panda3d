@@ -52,10 +52,10 @@ run(SpirVModule &module) {
   }
 
   // For each fragment entry point, find the output variable with location 0.
-  pmap<uint32_t, uint32_t> entry_points;
+  pmap<Id, Id> entry_points;
   for (const EntryPoint &ep : module.get_entry_points()) {
     if (ep.model == spv::ExecutionModelFragment) {
-      for (uint32_t var_id : ep.interface_vars) {
+      for (Id var_id : ep.interface_vars) {
         if (module.get_location(var_id) == 0) {
           entry_points[ep.function_id] = var_id;
           break;
@@ -67,7 +67,7 @@ run(SpirVModule &module) {
   for (const auto &item : entry_points) {
     Function *function = module.get_function(item.first);
     nassertd(function != nullptr) continue;
-    uint32_t var_id = item.second;
+    Id var_id = item.second;
 
     // There may be multiple returns.  Insert an alpha test before every
     // return statement.
@@ -80,9 +80,9 @@ run(SpirVModule &module) {
 
       if (_mode == M_never) {
         // Replace the OpReturn with an OpKill.
-        cursor.replace([](SpirVBuilder &builder) -> uint32_t {
+        cursor.replace([](SpirVBuilder &builder) -> Id {
           builder.op_kill();
-          return 0u;
+          return Id();
         });
         continue;
       }
@@ -102,13 +102,13 @@ run(SpirVModule &module) {
       }
 
       cursor.insert_before([&](SpirVBuilder &builder) {
-        uint32_t alpha = builder.op_load(builder.op_access_chain(var_id, {module.define_int_constant(3)}));
-        uint32_t ref = _spec_constant ? _alpha_ref_var_id : builder.op_load(_alpha_ref_var_id);
+        Id alpha = builder.op_load(builder.op_access_chain(var_id, {module.define_int_constant(3)}));
+        Id ref = _spec_constant ? _alpha_ref_var_id : builder.op_load(_alpha_ref_var_id);
 
-        uint32_t cond = builder.op_compare(opcode, alpha, ref);
+        Id cond = builder.op_compare(opcode, alpha, ref);
         _compare_op_ids.push_back(cond);
 
-        uint32_t branch = builder.branch_if(cond);
+        Id branch = builder.branch_if(cond);
           builder.op_kill();
         builder.branch_endif(branch);
       });

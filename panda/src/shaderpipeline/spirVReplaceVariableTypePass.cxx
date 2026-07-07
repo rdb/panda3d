@@ -18,7 +18,7 @@
  *
  */
 SpirVReplaceVariableTypePass::
-SpirVReplaceVariableTypePass(uint32_t variable_id, const ShaderType *type,
+SpirVReplaceVariableTypePass(SpirVId variable_id, const ShaderType *type,
                              spv::StorageClass storage_class) :
   _variable_id(variable_id),
   _new_type(type),
@@ -57,7 +57,7 @@ run(SpirVModule &module) {
 
     decl->args[0] = _pointer_type_id;
     decl->args[2] = (uint32_t)_new_storage_class;
-    module.record_result(*decl, 0);
+    module.record_result(*decl, Id());
   }
 
   // Now fix up all the loads and copies of the variable.
@@ -66,9 +66,9 @@ run(SpirVModule &module) {
     while (cursor.next()) {
       switch (cursor->opcode) {
       case spv::OpLoad:
-        if (_pointer_ids.count(cursor->args[2])) {
-          uint32_t result_id = cursor->args[1];
-          uint32_t var_id = cursor->args[2];
+        if (_pointer_ids.count(Id(cursor->args[2]))) {
+          Id result_id(cursor->args[1]);
+          Id var_id(cursor->args[2]);
 
           // The type the rest of the shader expects to load.
           const ShaderType *result_type = module.resolve_value_type(result_id);
@@ -86,8 +86,8 @@ run(SpirVModule &module) {
             // Replace the original load with a load of the new type followed
             // by a conversion, of which the final op takes over the original
             // result id.
-            cursor.replace([&](SpirVBuilder &builder) -> uint32_t {
-              uint32_t temp = builder.op_load(var_id);
+            cursor.replace([&](SpirVBuilder &builder) -> Id {
+              Id temp = builder.op_load(var_id);
 
               if (new_vector != nullptr && old_vector != nullptr) {
                 // Swizzle the vector.
@@ -110,7 +110,7 @@ run(SpirVModule &module) {
               if (new_vector != nullptr) {
                 // Convert the scalar, then replicate it into a vector.
                 temp = builder.op_convert(new_vector->get_scalar_type(), temp);
-                pvector<uint32_t> components(new_vector->get_num_components(), temp);
+                pvector<Id> components(new_vector->get_num_components(), temp);
                 return builder.op_composite_construct(new_vector, components);
               }
               if (old_vector != nullptr) {
@@ -147,11 +147,11 @@ run(SpirVModule &module) {
       case spv::OpAtomicFMaxEXT:
       case spv::OpAtomicFAddEXT:
         // These loads turn a pointer into a dereferenced object.
-        if (_pointer_ids.count(cursor->args[2])) {
+        if (_pointer_ids.count(Id(cursor->args[2]))) {
           Instruction &op = *cursor;
           op.args[0] = _type_id;
           module.record_result(op, function.id);
-          _object_ids.insert(op.args[1]);
+          _object_ids.insert(Id(op.args[1]));
         }
         break;
 
@@ -160,15 +160,15 @@ run(SpirVModule &module) {
         // This clones a pointer or object verbatim, so keep following the chain.
         {
           Instruction &op = *cursor;
-          if (_pointer_ids.count(op.args[2])) {
+          if (_pointer_ids.count(Id(op.args[2]))) {
             op.args[0] = _pointer_type_id;
             module.record_result(op, function.id);
-            _pointer_ids.insert(op.args[1]);
+            _pointer_ids.insert(Id(op.args[1]));
           }
-          if (_object_ids.count(op.args[2])) {
+          if (_object_ids.count(Id(op.args[2]))) {
             op.args[0] = _type_id;
             module.record_result(op, function.id);
-            _object_ids.insert(op.args[1]);
+            _object_ids.insert(Id(op.args[1]));
           }
         }
         break;
@@ -178,18 +178,18 @@ run(SpirVModule &module) {
           Instruction &op = *cursor;
 
           // The result type for this op must be the same for both operands.
-          nassertd(_pointer_ids.count(op.args[3]) == _pointer_ids.count(op.args[4])) {}
-          nassertd(_object_ids.count(op.args[3]) == _object_ids.count(op.args[4])) {}
+          nassertd(_pointer_ids.count(Id(op.args[3])) == _pointer_ids.count(Id(op.args[4]))) {}
+          nassertd(_object_ids.count(Id(op.args[3])) == _object_ids.count(Id(op.args[4]))) {}
 
-          if (_pointer_ids.count(op.args[3])) {
+          if (_pointer_ids.count(Id(op.args[3]))) {
             op.args[0] = _pointer_type_id;
             module.record_result(op, function.id);
-            _pointer_ids.insert(op.args[1]);
+            _pointer_ids.insert(Id(op.args[1]));
           }
-          if (_object_ids.count(op.args[3])) {
+          if (_object_ids.count(Id(op.args[3]))) {
             op.args[0] = _type_id;
             module.record_result(op, function.id);
-            _object_ids.insert(op.args[1]);
+            _object_ids.insert(Id(op.args[1]));
           }
         }
         break;

@@ -21,10 +21,11 @@ void SpirVRemoveUnusedVariablesPass::
 run(SpirVModule &module) {
   SpirVUsageAnalysis usage(module);
 
-  pmap<uint32_t, BitArray> ftype_params_used;
-  pset<uint32_t> dead_ids;
+  pmap<Id, BitArray> ftype_params_used;
+  pset<Id> dead_ids;
 
-  for (uint32_t id = 0; id < module.get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < module.get_id_bound(); ++word) {
+    Id id(word);
     if (module.get_kind(id) == IdKind::VARIABLE && !usage.is_used(id)) {
       if (shader_cat.is_debug()) {
         shader_cat.debug()
@@ -37,8 +38,8 @@ run(SpirVModule &module) {
   }
 
   for (const Function &function : module.get_functions()) {
-    uint32_t func_type_id = module.get_type_id(function.id);
-    pvector<uint32_t> params = module.get_function_parameters(function.id);
+    Id func_type_id = module.get_type_id(function.id);
+    pvector<Id> params = module.get_function_parameters(function.id);
     for (size_t i = 0; i < params.size(); ++i) {
       // Only unused pointer parameters can be removed; a value parameter may
       // not simply have its argument dropped without changing semantics.
@@ -55,7 +56,7 @@ run(SpirVModule &module) {
   module.delete_dead_code(dead_ids);
 
   for (const auto &item : ftype_params_used) {
-    uint32_t func_type_id = item.first;
+    Id func_type_id = item.first;
     uint32_t num_params = 0;
     {
       const Instruction *decl = module.get_decl(func_type_id);

@@ -18,7 +18,7 @@
  *
  */
 SpirVMakeBlockPass::
-SpirVMakeBlockPass(const ShaderType::Struct *block_type, const pvector<uint32_t> &member_ids,
+SpirVMakeBlockPass(const ShaderType::Struct *block_type, const pvector<SpirVId> &member_ids,
                    spv::StorageClass storage_class, uint32_t binding, uint32_t set) :
   _block_type(block_type),
   _storage_class(storage_class),
@@ -27,8 +27,8 @@ SpirVMakeBlockPass(const ShaderType::Struct *block_type, const pvector<uint32_t>
   nassertv(block_type->get_num_members() == member_ids.size());
 
   for (uint32_t i = 0; i < (uint32_t)member_ids.size(); ++i) {
-    uint32_t member_id = member_ids[i];
-    if (member_id > 0) {
+    Id member_id = member_ids[i];
+    if (member_id != 0) {
       _member_indices[member_id] = i;
     }
   }
@@ -40,7 +40,7 @@ SpirVMakeBlockPass(const ShaderType::Struct *block_type, const pvector<uint32_t>
 void SpirVMakeBlockPass::
 run(SpirVModule &module) {
   // Define the block type and variable.
-  uint32_t block_type_id = module.define_type(_block_type);
+  Id block_type_id = module.define_type(_block_type);
   _block_var_id = module.define_variable(_block_type, _storage_class);
 
   module.decorate(block_type_id, spv::DecorationBlock);
@@ -68,10 +68,10 @@ run(SpirVModule &module) {
         if (arg_index >= cursor->args.size()) {
           return;
         }
-        auto it = _member_indices.find(cursor->args[arg_index]);
+        auto it = _member_indices.find(Id(cursor->args[arg_index]));
         if (it != _member_indices.end()) {
-          uint32_t constant_id = module.define_int_constant(it->second);
-          uint32_t chain_id = 0;
+          Id constant_id = module.define_int_constant(it->second);
+          Id chain_id;
           cursor.insert_before([&](SpirVBuilder &builder) {
             chain_id = builder.op_access_chain(_block_var_id, {constant_id});
           });
@@ -84,16 +84,16 @@ run(SpirVModule &module) {
       case spv::OpInBoundsAccessChain:
         {
           Instruction &op = *cursor;
-          if (op.args.size() >= 3 && _member_indices.count(op.args[2])) {
-            uint32_t member_index = _member_indices[op.args[2]];
-            uint32_t constant_id = module.define_int_constant(member_index);
+          if (op.args.size() >= 3 && _member_indices.count(Id(op.args[2]))) {
+            uint32_t member_index = _member_indices[Id(op.args[2])];
+            Id constant_id = module.define_int_constant(member_index);
 
             // Get a type pointer with the correct storage class, and prepend
             // our new block variable to the existing access chain.
             op.args[0] = module.define_pointer_type(
-              module.resolve_pointer_type(op.args[0]), _storage_class);
+              module.resolve_pointer_type(Id(op.args[0])), _storage_class);
             op.args[2] = _block_var_id;
-            op.args.insert(op.args.begin() + 3, constant_id);
+            op.args.insert(op.args.begin() + 3, (uint32_t)constant_id);
 
             // The result type changed; make the id index follow.
             module.record_result(op, function.id);

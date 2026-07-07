@@ -27,18 +27,18 @@ TEST_CASE("SpirVHoistStructResourcesPass moves resources out of structs", "[shad
   struct_def_builder.add_member(ShaderType::FLOAT, "f");
   const ShaderType *struct_type = ShaderType::register_type(std::move(struct_def_builder));
 
-  uint32_t id_sampled_image = module.define_type(sampler_type);
-  uint32_t id_struct = module.define_type(struct_type);
+  Id id_sampled_image = module.define_type(sampler_type);
+  Id id_struct = module.define_type(struct_type);
   module.set_name(id_struct, "S");
 
-  uint32_t id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
+  Id id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
   module.set_name(id_var, "s");
 
-  uint32_t id_const_0 = module.define_int_constant(0);
-  uint32_t id_const_1 = module.define_int_constant(1);
+  Id id_const_0 = module.define_int_constant(0);
+  Id id_const_1 = module.define_int_constant(1);
 
-  uint32_t id_main = add_main(module);
-  uint32_t id_chain_tex, id_chain_f;
+  Id id_main = add_main(module);
+  Id id_chain_tex, id_chain_f;
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     id_chain_tex = builder.op_access_chain(id_var, {id_const_0});
@@ -65,7 +65,7 @@ TEST_CASE("SpirVHoistStructResourcesPass moves resources out of structs", "[shad
   REQUIRE(hoisted.first.size() == 1);
   CHECK(hoisted.first[0] == 0);
 
-  uint32_t hoisted_var = hoisted.second;
+  Id hoisted_var = hoisted.second;
   CHECK(has_variable(result, hoisted_var));
 
   // The access chain to the sampler member was rebased onto the new variable,
@@ -104,18 +104,18 @@ TEST_CASE("SpirVHoistStructResourcesPass empties structs with only resources", "
   struct_def_builder.add_member(sampler_type, "tex");
   const ShaderType *struct_type = ShaderType::register_type(std::move(struct_def_builder));
 
-  uint32_t id_sampled_image = module.define_type(sampler_type);
-  uint32_t id_ptr_uc_image = module.define_pointer_type(sampler_type, spv::StorageClassUniformConstant);
-  uint32_t id_struct = module.define_type(struct_type);
+  Id id_sampled_image = module.define_type(sampler_type);
+  Id id_ptr_uc_image = module.define_pointer_type(sampler_type, spv::StorageClassUniformConstant);
+  Id id_struct = module.define_type(struct_type);
   module.set_name(id_struct, "S");
 
-  uint32_t id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
+  Id id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
   module.set_name(id_var, "s");
 
-  uint32_t id_const_0 = module.define_int_constant(0);
+  Id id_const_0 = module.define_int_constant(0);
 
-  uint32_t id_main = add_main(module);
-  uint32_t id_chain;
+  Id id_main = add_main(module);
+  Id id_chain;
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     id_chain = builder.op_access_chain(id_var, {id_const_0});
@@ -140,7 +140,7 @@ TEST_CASE("SpirVHoistStructResourcesPass empties structs with only resources", "
   REQUIRE(hoisted.first.size() == 1);
   CHECK(hoisted.first[0] == 0);
 
-  uint32_t hoisted_var = hoisted.second;
+  Id hoisted_var = hoisted.second;
   CHECK(has_variable(result, hoisted_var));
 
   bool found_chain = false;
@@ -179,18 +179,18 @@ TEST_CASE("SpirVHoistStructResourcesPass removes structs with only resources", "
   struct_def_builder.add_member(sampler_type, "tex");
   const ShaderType *struct_type = ShaderType::register_type(std::move(struct_def_builder));
 
-  uint32_t id_sampled_image = module.define_type(sampler_type);
-  uint32_t id_ptr_uc_image = module.define_pointer_type(sampler_type, spv::StorageClassUniformConstant);
-  uint32_t id_struct = module.define_type(struct_type);
+  Id id_sampled_image = module.define_type(sampler_type);
+  Id id_ptr_uc_image = module.define_pointer_type(sampler_type, spv::StorageClassUniformConstant);
+  Id id_struct = module.define_type(struct_type);
   module.set_name(id_struct, "S");
 
-  uint32_t id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
+  Id id_var = module.define_variable(struct_type, spv::StorageClassUniformConstant);
   module.set_name(id_var, "s");
 
-  uint32_t id_const_0 = module.define_int_constant(0);
+  Id id_const_0 = module.define_int_constant(0);
 
-  uint32_t id_main = add_main(module);
-  uint32_t id_chain;
+  Id id_main = add_main(module);
+  Id id_chain;
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     id_chain = builder.op_access_chain(id_var, {id_const_0});
@@ -209,7 +209,7 @@ TEST_CASE("SpirVHoistStructResourcesPass removes structs with only resources", "
   CHECK(result.validate());
 
   REQUIRE(pass._hoisted_vars.size() == 1);
-  uint32_t hoisted_var = pass._hoisted_vars.begin()->second;
+  Id hoisted_var = pass._hoisted_vars.begin()->second;
   CHECK(has_variable(result, hoisted_var));
   CHECK(!has_variable(result, id_var));
 
@@ -239,20 +239,20 @@ TEST_CASE("SpirVHoistStructResourcesPass keeps emptied structs as members", "[sh
   outer_def_builder.add_member(ShaderType::FLOAT, "f");
   const ShaderType *outer_struct_type = ShaderType::register_type(std::move(outer_def_builder));
 
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_inner = module.define_type(inner_struct_type);
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_inner = module.define_type(inner_struct_type);
   module.set_name(id_inner, "Inner");
-  uint32_t id_outer = module.define_type(outer_struct_type);
+  Id id_outer = module.define_type(outer_struct_type);
   module.set_name(id_outer, "Outer");
 
-  uint32_t id_var = module.define_variable(outer_struct_type, spv::StorageClassUniformConstant);
+  Id id_var = module.define_variable(outer_struct_type, spv::StorageClassUniformConstant);
   module.set_name(id_var, "o");
 
-  uint32_t id_const_0 = module.define_int_constant(0);
-  uint32_t id_const_1 = module.define_int_constant(1);
+  Id id_const_0 = module.define_int_constant(0);
+  Id id_const_1 = module.define_int_constant(1);
 
-  uint32_t id_main = add_main(module);
-  uint32_t id_chain_t, id_chain_f;
+  Id id_main = add_main(module);
+  Id id_chain_t, id_chain_f;
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     id_chain_t = builder.op_access_chain(id_var, {id_const_0, id_const_0});
@@ -279,7 +279,7 @@ TEST_CASE("SpirVHoistStructResourcesPass keeps emptied structs as members", "[sh
   REQUIRE(hoisted.first.size() == 2);
   CHECK(hoisted.first[0] == 0);
   CHECK(hoisted.first[1] == 0);
-  uint32_t hoisted_var = hoisted.second;
+  Id hoisted_var = hoisted.second;
   CHECK(has_variable(result, hoisted_var));
 
   // Inner is emptied but remains a member of Outer, which keeps its member

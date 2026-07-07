@@ -31,7 +31,7 @@ get_insertion_index() const {
 /**
  * Returns the id of the function the cursor is currently inside, or 0.
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 get_current_function_id() const {
   return _current_function_id;
 }
@@ -39,7 +39,7 @@ get_current_function_id() const {
 /**
  * Allocates a fresh identifier.
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 allocate_id() {
   return _module.allocate_id();
 }
@@ -55,7 +55,7 @@ insert(spv::Op opcode, std::initializer_list<uint32_t> args) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_type(const ShaderType *type) {
   return _module.define_type(type);
 }
@@ -63,7 +63,7 @@ define_type(const ShaderType *type) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_pointer_type(const ShaderType *type, spv::StorageClass storage_class) {
   return _module.define_pointer_type(type, storage_class);
 }
@@ -71,7 +71,7 @@ define_pointer_type(const ShaderType *type, spv::StorageClass storage_class) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_variable(const ShaderType *type, spv::StorageClass storage_class) {
   return _module.define_variable(type, storage_class);
 }
@@ -79,7 +79,7 @@ define_variable(const ShaderType *type, spv::StorageClass storage_class) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_int_constant(int32_t constant) {
   return _module.define_int_constant(constant);
 }
@@ -87,7 +87,7 @@ define_int_constant(int32_t constant) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_float_constant(float constant) {
   return _module.define_float_constant(constant);
 }
@@ -95,7 +95,7 @@ define_float_constant(float constant) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_constant(const ShaderType *type, uint32_t constant) {
   return _module.define_constant(type, constant);
 }
@@ -103,7 +103,7 @@ define_constant(const ShaderType *type, uint32_t constant) {
 /**
  *
  */
-INLINE uint32_t SpirVBuilder::
+INLINE SpirVId SpirVBuilder::
 define_null_constant(const ShaderType *type) {
   return _module.define_null_constant(type);
 }

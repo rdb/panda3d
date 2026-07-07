@@ -23,18 +23,18 @@ TEST_CASE("SpirVRemoveUnusedVariablesPass removes unused variables", "[shaderpip
   const ShaderType *vec4_type =
     ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
 
-  uint32_t id_in_color = module.define_variable(vec4_type, spv::StorageClassInput);
+  Id id_in_color = module.define_variable(vec4_type, spv::StorageClassInput);
   module.decorate(id_in_color, spv::DecorationLocation, 0u);
-  uint32_t id_out_color = module.define_variable(vec4_type, spv::StorageClassOutput);
+  Id id_out_color = module.define_variable(vec4_type, spv::StorageClassOutput);
   module.decorate(id_out_color, spv::DecorationLocation, 0u);
-  uint32_t id_unused = module.define_variable(ShaderType::FLOAT, spv::StorageClassUniformConstant);
+  Id id_unused = module.define_variable(ShaderType::FLOAT, spv::StorageClassUniformConstant);
   module.set_name(id_unused, "unused");
 
-  uint32_t main_id = add_main(module, spv::ExecutionModelFragment,
+  Id main_id = add_main(module, spv::ExecutionModelFragment,
                               {id_in_color, id_out_color});
   {
     SpirVBuilder builder = builder_before_return(module, main_id);
-    uint32_t tmp = builder.op_load(id_in_color);
+    Id tmp = builder.op_load(id_in_color);
     builder.op_store(id_out_color, tmp);
   }
 

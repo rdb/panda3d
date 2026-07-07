@@ -23,7 +23,7 @@ void SpirVInstructionCursor::
 remove() {
   nassertv(_index < _function.instructions.size());
   Instruction &op = _function.instructions[_index];
-  uint32_t result_id = op.get_result();
+  SpirVId result_id = op.get_result();
   if (result_id != 0) {
     _module.delete_id(result_id);
   } else {
@@ -48,7 +48,7 @@ after_insert(const SpirVBuilder &builder) {
  */
 void SpirVInstructionCursor::
 finish_replace(const SpirVBuilder &builder, size_t first_inserted,
-               uint32_t result_id) {
+               SpirVId result_id) {
   nassertv(builder.get_current_function_id() == _function.id);
   pvector<Instruction> &instructions = _function.instructions;
 
@@ -57,7 +57,7 @@ finish_replace(const SpirVBuilder &builder, size_t first_inserted,
   size_t pos = builder.get_insertion_index();
   nassertv(pos < instructions.size());
 
-  uint32_t orig_id = instructions[pos].get_result();
+  SpirVId orig_id = instructions[pos].get_result();
   if (orig_id != 0) {
     // The replacement value takes over the original result id, so that
     // downstream uses of it keep working without a rewrite.

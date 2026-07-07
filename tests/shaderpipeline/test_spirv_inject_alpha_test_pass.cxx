@@ -21,10 +21,10 @@ TEST_CASE("SpirVInjectAlphaTestPass injects a comparison", "[shaderpipeline]") {
   SpirVModule module = make_module();
   const ShaderType *vec4_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
 
-  uint32_t color = module.define_variable(vec4_type, spv::StorageClassOutput);
+  Id color = module.define_variable(vec4_type, spv::StorageClassOutput);
   module.decorate(color, spv::DecorationLocation, 0u);
 
-  uint32_t main_id = add_main(module, spv::ExecutionModelFragment, {color});
+  Id main_id = add_main(module, spv::ExecutionModelFragment, {color});
   {
     SpirVBuilder builder = builder_before_return(module, main_id);
     builder.op_store(color, module.define_null_constant(vec4_type));
@@ -79,16 +79,16 @@ TEST_CASE("SpirVInjectAlphaTestPass tests before every return", "[shaderpipeline
   SpirVModule module = make_module();
   const ShaderType *vec4_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
 
-  uint32_t color = module.define_variable(vec4_type, spv::StorageClassOutput);
+  Id color = module.define_variable(vec4_type, spv::StorageClassOutput);
   module.decorate(color, spv::DecorationLocation, 0u);
 
-  uint32_t main_id;
+  Id main_id;
   {
     SpirVBuilder builder(module);
     main_id = builder.op_function(nullptr);
     builder.op_label();
     builder.op_store(color, module.define_null_constant(vec4_type));
-    uint32_t merge = builder.branch_if(module.define_constant(ShaderType::BOOL, 1));
+    Id merge = builder.branch_if(module.define_constant(ShaderType::BOOL, 1));
     builder.op_return();
     builder.branch_endif(merge);
     builder.op_return();

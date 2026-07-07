@@ -19,12 +19,12 @@
 TEST_CASE("SpirVDebugOutputPass converts prints to buffer writes", "[shaderpipeline]") {
   // A fragment shader containing just: debugPrintfEXT("value: %f", 1.0);
   SpirVModule module = make_module();
-  uint32_t id_import = module.add_ext_inst_import("NonSemantic.DebugPrintf");
-  uint32_t id_string = module.add_string("value: %f");
-  uint32_t id_void = module.define_type(nullptr);
-  uint32_t id_const_one = module.define_float_constant(1.0f);
+  Id id_import = module.add_ext_inst_import("NonSemantic.DebugPrintf");
+  Id id_string = module.add_string("value: %f");
+  Id id_void = module.define_type(nullptr);
+  Id id_const_one = module.define_float_constant(1.0f);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
     b.insert(spv::OpExtInst, {id_void, b.allocate_id(), id_import,
@@ -66,12 +66,12 @@ TEST_CASE("SpirVDebugOutputPass converts asserts to buffer writes", "[shaderpipe
   // A fragment shader containing just: assert(1 < 2), which is encoded as a
   // print with the special format string "%!".
   SpirVModule module = make_module();
-  uint32_t id_import = module.add_ext_inst_import("NonSemantic.DebugPrintf");
-  uint32_t id_string_fmt = module.add_string("%!");
-  uint32_t id_string_expr = module.add_string("1 < 2");
-  uint32_t id_void = module.define_type(nullptr);
+  Id id_import = module.add_ext_inst_import("NonSemantic.DebugPrintf");
+  Id id_string_fmt = module.add_string("%!");
+  Id id_string_expr = module.add_string("1 < 2");
+  Id id_void = module.define_type(nullptr);
 
-  uint32_t main_id = add_main(module);
+  Id main_id = add_main(module);
   {
     SpirVBuilder b = builder_before_return(module, main_id);
     b.insert(spv::OpExtInst, {id_void, b.allocate_id(), id_import,
@@ -105,7 +105,8 @@ TEST_CASE("SpirVDebugOutputPass converts asserts to buffer writes", "[shaderpipe
 
   bool found_frag_coord = false;
   const SpirVModule &out_module = transformer.get_module();
-  for (uint32_t id = 0; id < transformer.get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < transformer.get_id_bound(); ++word) {
+    Id id(word);
     if (out_module.get_kind(id) == SpirVModule::IdKind::VARIABLE &&
         out_module.get_builtin(id) == spv::BuiltInFragCoord) {
       found_frag_coord = true;

@@ -36,27 +36,27 @@ has_result_type() const {
 /**
  * Returns the result id of this instruction, or 0 if it has none.
  */
-uint32_t SpirVModule::Instruction::
+SpirVId SpirVModule::Instruction::
 get_result() const {
   bool has_result, has_type;
   spv::HasResultAndType(opcode, &has_result, &has_type);
   if (!has_result || args.size() <= (size_t)has_type) {
-    return 0;
+    return SpirVId();
   }
-  return args[has_type];
+  return SpirVId(args[has_type]);
 }
 
 /**
  * Returns the result type id of this instruction, or 0 if it has none.
  */
-uint32_t SpirVModule::Instruction::
+SpirVId SpirVModule::Instruction::
 get_result_type() const {
   bool has_result, has_type;
   spv::HasResultAndType(opcode, &has_result, &has_type);
   if (!has_type || args.empty()) {
-    return 0;
+    return SpirVId();
   }
-  return args[0];
+  return SpirVId(args[0]);
 }
 
 /**
@@ -349,7 +349,7 @@ parse(const uint32_t *words, size_t num_words) {
       continue;
 
     case spv::OpExtInstImport:
-      record_result(op, 0);
+      record_result(op, SpirVId());
       _ext_inst_imports.push_back(std::move(op));
       continue;
 
@@ -361,10 +361,13 @@ parse(const uint32_t *words, size_t num_words) {
       {
         EntryPoint ep;
         ep.model = (spv::ExecutionModel)args[0];
-        ep.function_id = args[1];
+        ep.function_id = SpirVId(args[1]);
         size_t end = 2;
         ep.name = op.get_string(2, &end);
-        ep.interface_vars.assign(op.args.begin() + end, op.args.end());
+        ep.interface_vars.reserve(op.args.size() - end);
+        for (size_t ai = end; ai < op.args.size(); ++ai) {
+          ep.interface_vars.push_back(SpirVId(op.args[ai]));
+        }
         _entry_points.push_back(std::move(ep));
       }
       continue;
@@ -375,7 +378,7 @@ parse(const uint32_t *words, size_t num_words) {
       continue;
 
     case spv::OpString:
-      record_result(op, 0);
+      record_result(op, SpirVId());
       _debug.push_back(std::move(op));
       continue;
 
@@ -441,8 +444,8 @@ parse(const uint32_t *words, size_t num_words) {
           << "OpFunction may not occur within another function!\n";
         return false;
       }
-      record_result(op, 0);
-      _functions.push_back(Function {nargs >= 2 ? args[1] : 0u, {}});
+      record_result(op, SpirVId());
+      _functions.push_back(Function {SpirVId(nargs >= 2 ? args[1] : 0u), {}});
       function = &_functions.back();
       function->instructions.push_back(std::move(op));
       continue;
@@ -462,7 +465,7 @@ parse(const uint32_t *words, size_t num_words) {
         record_result(op, function->id);
         function->instructions.push_back(std::move(op));
       } else {
-        record_result_at(op, 0, (int32_t)_globals.size());
+        record_result_at(op, SpirVId(), (int32_t)_globals.size());
         _globals.push_back(std::move(op));
       }
       continue;
@@ -484,9 +487,9 @@ parse(const uint32_t *words, size_t num_words) {
  * call this to make the index follow).
  */
 void SpirVModule::
-record_result(const Instruction &op, uint32_t function_id) {
+record_result(const Instruction &op, SpirVId function_id) {
   int32_t global_index = -1;
-  uint32_t result_id = op.get_result();
+  SpirVId result_id = op.get_result();
   if (function_id == 0 && result_id != 0 && result_id < _ids.size()) {
     global_index = _ids[result_id]._global_index;
   }
@@ -497,8 +500,8 @@ record_result(const Instruction &op, uint32_t function_id) {
  * Implementation of record_result, with an explicit declaration index.
  */
 void SpirVModule::
-record_result_at(const Instruction &op, uint32_t function_id, int32_t global_index) {
-  uint32_t result_id = op.get_result();
+record_result_at(const Instruction &op, SpirVId function_id, int32_t global_index) {
+  SpirVId result_id = op.get_result();
   if (result_id == 0) {
     return;
   }
@@ -544,7 +547,7 @@ record_result_at(const Instruction &op, uint32_t function_id, int32_t global_ind
 
   case spv::OpVariable:
     entry._kind = IdKind::VARIABLE;
-    entry._type_id = op.args[0];
+    entry._type_id = SpirVId(op.args[0]);
     break;
 
   case spv::OpConstant:
@@ -554,25 +557,29 @@ record_result_at(const Instruction &op, uint32_t function_id, int32_t global_ind
   case spv::OpConstantComposite:
   case spv::OpSpecConstantComposite:
     entry._kind = IdKind::CONSTANT;
-    entry._type_id = op.args[0];
+    entry._type_id = SpirVId(op.args[0]);
     break;
 
   case spv::OpSpecConstant:
   case spv::OpSpecConstantTrue:
   case spv::OpSpecConstantFalse:
+  // A spec constant expression too: its value is not knowable here
+  // (resolve_constant returns 0 for it), but it is a module-scope constant,
+  // notably usable as an OpTypeArray length and as a constant expression.
+  case spv::OpSpecConstantOp:
     entry._kind = IdKind::SPEC_CONSTANT;
-    entry._type_id = op.args[0];
+    entry._type_id = SpirVId(op.args[0]);
     break;
 
   case spv::OpFunction:
     entry._kind = IdKind::FUNCTION;
-    entry._type_id = (op.args.size() >= 4) ? op.args[3] : 0;
+    entry._type_id = SpirVId((op.args.size() >= 4) ? op.args[3] : 0);
     entry._function_id = result_id;
     break;
 
   case spv::OpFunctionParameter:
     entry._kind = IdKind::PARAMETER;
-    entry._type_id = op.args[0];
+    entry._type_id = SpirVId(op.args[0]);
     break;
 
   case spv::OpExtInstImport:
@@ -586,7 +593,7 @@ record_result_at(const Instruction &op, uint32_t function_id, int32_t global_ind
   default:
     if (op.has_result_type()) {
       entry._kind = IdKind::TEMPORARY;
-      entry._type_id = op.args[0];
+      entry._type_id = SpirVId(op.args[0]);
     }
     // Results without a type (labels, decoration groups) stay NONE.
     break;
@@ -598,7 +605,7 @@ record_result_at(const Instruction &op, uint32_t function_id, int32_t global_ind
  * The declaring instruction itself is the caller's to remove.
  */
 void SpirVModule::
-clear_id_state(uint32_t id) {
+clear_id_state(SpirVId id) {
   _names.erase(id);
   _reflection_names.erase(id);
   _member_names.erase(id);
@@ -888,7 +895,7 @@ get_global_id_operands(const Instruction &op, pvector<size_t> &indices) {
  * Returns the function with the given id, or null if it does not exist.
  */
 SpirVModule::Function *SpirVModule::
-get_function(uint32_t function_id) {
+get_function(SpirVId function_id) {
   for (Function &function : _functions) {
     if (function.id == function_id) {
       return &function;
@@ -902,7 +909,7 @@ get_function(uint32_t function_id) {
  * if there is none.
  */
 SpirVModule::Instruction *SpirVModule::
-get_global(uint32_t result_id) {
+get_global(SpirVId result_id) {
   const IdEntry &entry = get_entry(result_id);
   if (entry._global_index < 0 || (size_t)entry._global_index >= _globals.size()) {
     return nullptr;
@@ -916,7 +923,7 @@ get_global(uint32_t result_id) {
  * the id is not declared in the globals section.
  */
 const SpirVModule::Instruction *SpirVModule::
-get_decl(uint32_t id) const {
+get_decl(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._global_index < 0 || (size_t)entry._global_index >= _globals.size()) {
     return nullptr;
@@ -932,8 +939,8 @@ get_decl(uint32_t id) const {
  * is the element, component, pointee, image or return type, read from the
  * declaration.
  */
-uint32_t SpirVModule::
-get_type_id(uint32_t id) const {
+SpirVId SpirVModule::
+get_type_id(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._kind == IdKind::TYPE || entry._kind == IdKind::POINTER_TYPE ||
       entry._kind == IdKind::FUNCTION_TYPE) {
@@ -945,23 +952,23 @@ get_type_id(uint32_t id) const {
       case spv::OpTypeArray:
       case spv::OpTypeRuntimeArray:
       case spv::OpTypeSampledImage:
-        return decl->args[1];
+        return SpirVId(decl->args[1]);
 
       case spv::OpTypeFunction:
         // The return type.
-        return decl->args[1];
+        return SpirVId(decl->args[1]);
 
       case spv::OpTypePointer:
-        return (decl->args.size() >= 3) ? decl->args[2] : 0;
+        return SpirVId((decl->args.size() >= 3) ? decl->args[2] : 0);
 
       default:
         break;
       }
     }
-    nassertr(false, 0);
-    return 0;
+    nassertr(false, SpirVId());
+    return SpirVId();
   }
-  nassertr(entry._type_id != 0, 0);
+  nassertr(entry._type_id != 0, SpirVId());
   return entry._type_id;
 }
 
@@ -971,7 +978,7 @@ get_type_id(uint32_t id) const {
  * as StorageBuffer, matching how the type is resolved.
  */
 spv::StorageClass SpirVModule::
-get_storage_class(uint32_t id) const {
+get_storage_class(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._kind == IdKind::VARIABLE) {
     if (entry._function_id != 0) {
@@ -979,16 +986,16 @@ get_storage_class(uint32_t id) const {
     }
     const Instruction *decl = get_decl(id);
     if (decl != nullptr && decl->args.size() >= 3) {
-      const Instruction *ptr_decl = get_decl(decl->args[0]);
-      uint32_t pointee = (ptr_decl != nullptr && ptr_decl->args.size() >= 3)
-        ? ptr_decl->args[2] : 0;
+      const Instruction *ptr_decl = get_decl(SpirVId(decl->args[0]));
+      SpirVId pointee((ptr_decl != nullptr && ptr_decl->args.size() >= 3)
+        ? ptr_decl->args[2] : 0);
       return canonicalize_storage_class((spv::StorageClass)decl->args[2], pointee);
     }
   }
   else if (entry._kind == IdKind::POINTER_TYPE) {
     const Instruction *decl = get_decl(id);
     if (decl != nullptr && decl->args.size() >= 3) {
-      return canonicalize_storage_class((spv::StorageClass)decl->args[1], decl->args[2]);
+      return canonicalize_storage_class((spv::StorageClass)decl->args[1], SpirVId(decl->args[2]));
     }
   }
   return spv::StorageClassMax;
@@ -1000,17 +1007,17 @@ get_storage_class(uint32_t id) const {
  * StorageBuffer, the way newer SPIR-V declares it.
  */
 spv::StorageClass SpirVModule::
-canonicalize_storage_class(spv::StorageClass storage_class, uint32_t pointee_type_id) const {
+canonicalize_storage_class(spv::StorageClass storage_class, SpirVId pointee_type_id) const {
   if (storage_class != spv::StorageClassUniform || pointee_type_id == 0) {
     return storage_class;
   }
   const Instruction *decl = get_decl(pointee_type_id);
   while (decl != nullptr && (decl->opcode == spv::OpTypeArray ||
                              decl->opcode == spv::OpTypeRuntimeArray)) {
-    decl = get_decl(decl->args[1]);
+    decl = get_decl(SpirVId(decl->args[1]));
   }
   if (decl != nullptr && decl->opcode == spv::OpTypeStruct &&
-      has_decoration(decl->args[0], spv::DecorationBufferBlock)) {
+      has_decoration(SpirVId(decl->args[0]), spv::DecorationBufferBlock)) {
     return spv::StorageClassStorageBuffer;
   }
   return storage_class;
@@ -1018,10 +1025,11 @@ canonicalize_storage_class(spv::StorageClass storage_class, uint32_t pointee_typ
 
 /**
  * Looks up the given constant's (first word) value.  Also accepts a spec
- * constant, whose default value is returned.
+ * constant, whose default value is returned; the value of an OpSpecConstantOp
+ * expression is not knowable here, so 0 is returned for it.
  */
 uint32_t SpirVModule::
-resolve_constant(uint32_t id) const {
+resolve_constant(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._kind != IdKind::CONSTANT && entry._kind != IdKind::SPEC_CONSTANT) {
     return error_expected(id, "a constant");
@@ -1038,7 +1046,8 @@ resolve_constant(uint32_t id) const {
   case spv::OpSpecConstant:
     return (decl->args.size() >= 3) ? decl->args[2] : 0;
   default:
-    // Null and composite constants have no meaningful first word.
+    // Null and composite constants have no meaningful first word, and the
+    // value of a spec constant expression cannot be evaluated here.
     return 0;
   }
 }
@@ -1046,14 +1055,14 @@ resolve_constant(uint32_t id) const {
 /**
  * Returns the pointee type id of the given pointer type id.
  */
-uint32_t SpirVModule::
-unwrap_pointer_type(uint32_t id) const {
+SpirVId SpirVModule::
+unwrap_pointer_type(SpirVId id) const {
   if (get_entry(id)._kind != IdKind::POINTER_TYPE) {
     return error_expected(id, "a pointer type");
   }
   const Instruction *decl = get_decl(id);
-  nassertr(decl != nullptr && decl->args.size() >= 3, 0);
-  return decl->args[2];
+  nassertr(decl != nullptr && decl->args.size() >= 3, SpirVId());
+  return SpirVId(decl->args[2]);
 }
 
 /**
@@ -1061,7 +1070,7 @@ unwrap_pointer_type(uint32_t id) const {
  * not a struct type.
  */
 uint32_t SpirVModule::
-get_num_members(uint32_t type_id) const {
+get_num_members(SpirVId type_id) const {
   const Instruction *decl = get_decl(type_id);
   if (decl == nullptr || decl->opcode != spv::OpTypeStruct) {
     return 0;
@@ -1072,12 +1081,12 @@ get_num_members(uint32_t type_id) const {
 /**
  * Returns the type id of the given member of the given struct type.
  */
-uint32_t SpirVModule::
-get_member_type_id(uint32_t type_id, uint32_t member_index) const {
+SpirVId SpirVModule::
+get_member_type_id(SpirVId type_id, uint32_t member_index) const {
   const Instruction *decl = get_decl(type_id);
-  nassertr(decl != nullptr && decl->opcode == spv::OpTypeStruct, 0);
-  nassertr((size_t)member_index + 1 < decl->args.size(), 0);
-  return decl->args[member_index + 1];
+  nassertr(decl != nullptr && decl->opcode == spv::OpTypeStruct, SpirVId());
+  nassertr((size_t)member_index + 1 < decl->args.size(), SpirVId());
+  return SpirVId(decl->args[member_index + 1]);
 }
 
 /**
@@ -1085,20 +1094,20 @@ get_member_type_id(uint32_t type_id, uint32_t member_index) const {
  * with the given (literal) index: the member type for a struct, the element
  * or component type for arrays, vectors and matrices.
  */
-uint32_t SpirVModule::
-get_composite_member_type_id(uint32_t type_id, uint32_t member_index) const {
+SpirVId SpirVModule::
+get_composite_member_type_id(SpirVId type_id, uint32_t member_index) const {
   const Instruction *decl = get_decl(type_id);
-  nassertr(decl != nullptr, 0);
+  nassertr(decl != nullptr, SpirVId());
   switch (decl->opcode) {
   case spv::OpTypeStruct:
-    nassertr((size_t)member_index + 1 < decl->args.size(), 0);
-    return decl->args[member_index + 1];
+    nassertr((size_t)member_index + 1 < decl->args.size(), SpirVId());
+    return SpirVId(decl->args[member_index + 1]);
 
   case spv::OpTypeVector:
   case spv::OpTypeMatrix:
   case spv::OpTypeArray:
   case spv::OpTypeRuntimeArray:
-    return decl->args[1];
+    return SpirVId(decl->args[1]);
 
   default:
     return error_expected(type_id, "a composite type");
@@ -1109,9 +1118,9 @@ get_composite_member_type_id(uint32_t type_id, uint32_t member_index) const {
  * Returns the parameter ids of the given function, in order, by scanning the
  * OpFunctionParameter instructions at the top of its body.
  */
-pvector<uint32_t> SpirVModule::
-get_function_parameters(uint32_t function_id) const {
-  pvector<uint32_t> result;
+pvector<SpirVId> SpirVModule::
+get_function_parameters(SpirVId function_id) const {
+  pvector<SpirVId> result;
   for (const Function &function : _functions) {
     if (function.id != function_id) {
       continue;
@@ -1119,7 +1128,7 @@ get_function_parameters(uint32_t function_id) const {
     for (const Instruction &op : function.instructions) {
       if (op.opcode == spv::OpFunctionParameter) {
         if (op.args.size() >= 2) {
-          result.push_back(op.args[1]);
+          result.push_back(SpirVId(op.args[1]));
         }
       }
       else if (op.opcode != spv::OpFunction && op.opcode != spv::OpLine &&
@@ -1136,7 +1145,7 @@ get_function_parameters(uint32_t function_id) const {
  * Returns true if the given id carries the given (non-member) decoration.
  */
 bool SpirVModule::
-has_decoration(uint32_t id, spv::Decoration decoration) const {
+has_decoration(SpirVId id, spv::Decoration decoration) const {
   const Annotations *annotations = get_annotations(id);
   if (annotations == nullptr) {
     return false;
@@ -1155,7 +1164,7 @@ has_decoration(uint32_t id, spv::Decoration decoration) const {
  * the given id, or the given default if the id does not carry it.
  */
 uint32_t SpirVModule::
-get_decoration(uint32_t id, spv::Decoration decoration, uint32_t default_value) const {
+get_decoration(SpirVId id, spv::Decoration decoration, uint32_t default_value) const {
   const Annotations *annotations = get_annotations(id);
   if (annotations == nullptr) {
     return default_value;
@@ -1173,7 +1182,7 @@ get_decoration(uint32_t id, spv::Decoration decoration, uint32_t default_value) 
  * Returns true if the given struct member carries the given decoration.
  */
 bool SpirVModule::
-has_member_decoration(uint32_t type_id, uint32_t member_index, spv::Decoration decoration) const {
+has_member_decoration(SpirVId type_id, uint32_t member_index, spv::Decoration decoration) const {
   const Annotations *annotations = get_annotations(type_id);
   if (annotations == nullptr) {
     return false;
@@ -1193,7 +1202,7 @@ has_member_decoration(uint32_t type_id, uint32_t member_index, spv::Decoration d
  * struct member, or the given default if the member does not carry it.
  */
 uint32_t SpirVModule::
-get_member_decoration(uint32_t type_id, uint32_t member_index, spv::Decoration decoration, uint32_t default_value) const {
+get_member_decoration(SpirVId type_id, uint32_t member_index, spv::Decoration decoration, uint32_t default_value) const {
   const Annotations *annotations = get_annotations(type_id);
   if (annotations == nullptr) {
     return default_value;
@@ -1213,7 +1222,7 @@ get_member_decoration(uint32_t type_id, uint32_t member_index, spv::Decoration d
  * is memoized; see invalidate_types.
  */
 const ShaderType *SpirVModule::
-resolve_type(uint32_t id) const {
+resolve_type(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._kind != IdKind::TYPE) {
     error_expected(id, "a non-pointer type");
@@ -1226,7 +1235,7 @@ resolve_type(uint32_t id) const {
  * Internal implementation of resolve_type, without the kind check.
  */
 const ShaderType *SpirVModule::
-r_resolve_type(uint32_t id) const {
+r_resolve_type(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._type != nullptr) {
     return entry._type;
@@ -1257,7 +1266,7 @@ r_resolve_type(uint32_t id) const {
 
   case spv::OpTypeVector:
     {
-      const ShaderType *component = r_resolve_type(decl->args[1]);
+      const ShaderType *component = r_resolve_type(SpirVId(decl->args[1]));
       const ShaderType::Scalar *scalar = (component != nullptr) ? component->as_scalar() : nullptr;
       nassertr(scalar != nullptr, nullptr);
       type = ShaderType::register_type(
@@ -1269,7 +1278,7 @@ r_resolve_type(uint32_t id) const {
     {
       // SPIR-V uses GLSL parlance, in which a column is a row and a row is a
       // column, compared to Panda conventions.  We flip it around here.
-      const ShaderType *row = r_resolve_type(decl->args[1]);
+      const ShaderType *row = r_resolve_type(SpirVId(decl->args[1]));
       const ShaderType::Vector *row_type = (row != nullptr) ? row->as_vector() : nullptr;
       nassertr(row_type != nullptr, nullptr);
       type = ShaderType::register_type(
@@ -1284,7 +1293,7 @@ r_resolve_type(uint32_t id) const {
 
   case spv::OpTypeImage:
     {
-      const ShaderType *sampled = r_resolve_type(decl->args[1]);
+      const ShaderType *sampled = r_resolve_type(SpirVId(decl->args[1]));
       const ShaderType::Scalar *scalar = (sampled != nullptr) ? sampled->as_scalar() : nullptr;
       nassertr(scalar != nullptr, nullptr);
 
@@ -1354,7 +1363,7 @@ r_resolve_type(uint32_t id) const {
 
   case spv::OpTypeSampledImage:
     {
-      const ShaderType *image_shader_type = r_resolve_type(decl->args[1]);
+      const ShaderType *image_shader_type = r_resolve_type(SpirVId(decl->args[1]));
       const ShaderType::Image *image = (image_shader_type != nullptr)
         ? image_shader_type->as_image() : nullptr;
       if (image == nullptr) {
@@ -1363,7 +1372,7 @@ r_resolve_type(uint32_t id) const {
         return nullptr;
       }
       // The image's depth flag determines shadow sampler status.
-      const Instruction *image_decl = get_decl(decl->args[1]);
+      const Instruction *image_decl = get_decl(SpirVId(decl->args[1]));
       bool shadow = (image_decl != nullptr && image_decl->args.size() > 3 &&
                      image_decl->args[3] == 1);
       type = ShaderType::register_type(
@@ -1374,18 +1383,18 @@ r_resolve_type(uint32_t id) const {
 
   case spv::OpTypeArray:
     {
-      const ShaderType *element = r_resolve_type(decl->args[1]);
+      const ShaderType *element = r_resolve_type(SpirVId(decl->args[1]));
       if (element == nullptr) {
         return nullptr;
       }
       type = ShaderType::register_type(ShaderType::Array(
-        element, resolve_constant(decl->args[2]), get_array_stride(id)));
+        element, resolve_constant(SpirVId(decl->args[2])), get_array_stride(id)));
     }
     break;
 
   case spv::OpTypeRuntimeArray:
     {
-      const ShaderType *element = r_resolve_type(decl->args[1]);
+      const ShaderType *element = r_resolve_type(SpirVId(decl->args[1]));
       if (element == nullptr) {
         return nullptr;
       }
@@ -1399,7 +1408,7 @@ r_resolve_type(uint32_t id) const {
       ShaderType::Struct struct_type;
       for (size_t ai = 1; ai < decl->args.size(); ++ai) {
         uint32_t member_index = (uint32_t)(ai - 1);
-        uint32_t member_type_id = decl->args[ai];
+        SpirVId member_type_id(decl->args[ai]);
 
         if (get_member_builtin(id, member_index) != spv::BuiltInMax) {
           // Built-in members are not part of the Panda type.
@@ -1441,7 +1450,7 @@ r_resolve_type(uint32_t id) const {
  * struct member to its resolved type, recursing into arrays.
  */
 const ShaderType *SpirVModule::
-apply_member_decorations(uint32_t type_id, uint32_t member_index, const ShaderType *type) const {
+apply_member_decorations(SpirVId type_id, uint32_t member_index, const ShaderType *type) const {
   bool non_writable = has_member_decoration(type_id, member_index, spv::DecorationNonWritable);
   bool non_readable = has_member_decoration(type_id, member_index, spv::DecorationNonReadable);
   if (non_writable || non_readable) {
@@ -1492,7 +1501,7 @@ apply_member_decorations(uint32_t type_id, uint32_t member_index, const ShaderTy
  * decorated (glslang decorates the members of an SSBO rather than the block).
  */
 void SpirVModule::
-get_aggregate_access_flags(uint32_t struct_id, bool &non_writable, bool &non_readable) const {
+get_aggregate_access_flags(SpirVId struct_id, bool &non_writable, bool &non_readable) const {
   non_writable = has_decoration(struct_id, spv::DecorationNonWritable);
   non_readable = has_decoration(struct_id, spv::DecorationNonReadable);
   if (non_writable && non_readable) {
@@ -1521,7 +1530,7 @@ get_aggregate_access_flags(uint32_t struct_id, bool &non_writable, bool &non_rea
  * wrapping the struct.  The result is memoized; see invalidate_types.
  */
 const ShaderType *SpirVModule::
-resolve_pointer_type(uint32_t id) const {
+resolve_pointer_type(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   if (entry._kind != IdKind::POINTER_TYPE) {
     error_expected(id, "a pointer type");
@@ -1533,7 +1542,7 @@ resolve_pointer_type(uint32_t id) const {
   const Instruction *decl = get_decl(id);
   nassertr(decl != nullptr && decl->args.size() >= 3, nullptr);
 
-  uint32_t pointee_id = decl->args[2];
+  SpirVId pointee_id(decl->args[2]);
   const ShaderType *type;
   if (get_entry(pointee_id)._kind == IdKind::POINTER_TYPE) {
     type = resolve_pointer_type(pointee_id);
@@ -1548,10 +1557,10 @@ resolve_pointer_type(uint32_t id) const {
     const Instruction *block_decl = get_decl(pointee_id);
     while (block_decl != nullptr && (block_decl->opcode == spv::OpTypeArray ||
                                      block_decl->opcode == spv::OpTypeRuntimeArray)) {
-      block_decl = get_decl(block_decl->args[1]);
+      block_decl = get_decl(SpirVId(block_decl->args[1]));
     }
     if (block_decl != nullptr && block_decl->opcode == spv::OpTypeStruct) {
-      uint32_t block_type_id = block_decl->args[0];
+      SpirVId block_type_id(block_decl->args[0]);
       bool buffer_block = has_decoration(block_type_id, spv::DecorationBufferBlock);
       bool block = has_decoration(block_type_id, spv::DecorationBlock);
       if (buffer_block || block) {
@@ -1589,7 +1598,7 @@ resolve_pointer_type(uint32_t id) const {
  * itself.  The result is memoized; see invalidate_types.
  */
 const ShaderType *SpirVModule::
-resolve_value_type(uint32_t id) const {
+resolve_value_type(SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   switch (entry._kind) {
   case IdKind::TYPE:
@@ -1665,7 +1674,7 @@ resolve_value_type(uint32_t id) const {
       if (entry._type != nullptr) {
         return entry._type;
       }
-      uint32_t type_id = entry._type_id;
+      SpirVId type_id = entry._type_id;
       if (type_id == 0) {
         return nullptr;
       }
@@ -1754,7 +1763,7 @@ ensure_type_map() const {
       continue;
     }
 
-    uint32_t id = op.args[0];
+    SpirVId id(op.args[0]);
     const ShaderType *type = r_resolve_type(id);
     if (type == nullptr && op.opcode != spv::OpTypeVoid) {
       continue;
@@ -1780,7 +1789,8 @@ bool SpirVModule::
 is_canonical_type_decl(const Instruction &op) const {
   // Checks whether the given (already visited) component type declaration is
   // the canonical declaration for its ShaderType.
-  auto canonical_component = [this](uint32_t component_id) {
+  auto canonical_component = [this](uint32_t component_word) {
+    SpirVId component_id(component_word);
     const ShaderType *component = r_resolve_type(component_id);
     if (component == nullptr) {
       return false;
@@ -1823,7 +1833,7 @@ is_canonical_type_decl(const Instruction &op) const {
       // Canonical only if the image is declared exactly the way define_type()
       // would declare it for this sampled image type: sampled, single-sample,
       // known depthness, unknown format.
-      const Instruction *image_decl = get_decl(op.args[1]);
+      const Instruction *image_decl = get_decl(SpirVId(op.args[1]));
       return image_decl != nullptr && image_decl->opcode == spv::OpTypeImage &&
              image_decl->args.size() >= 8 &&
              image_decl->args[6] == 1 && image_decl->args[5] == 0 &&
@@ -1833,7 +1843,7 @@ is_canonical_type_decl(const Instruction &op) const {
 
   case spv::OpTypeStruct:
     for (size_t ai = 1; ai < op.args.size(); ++ai) {
-      if (get_member_builtin(op.args[0], (uint32_t)(ai - 1)) != spv::BuiltInMax) {
+      if (get_member_builtin(SpirVId(op.args[0]), (uint32_t)(ai - 1)) != spv::BuiltInMax) {
         continue;
       }
       if (!canonical_component(op.args[ai])) {
@@ -1852,7 +1862,7 @@ is_canonical_type_decl(const Instruction &op) const {
  * BuiltIn decoration.
  */
 bool SpirVModule::
-has_builtin_members(uint32_t type_id) const {
+has_builtin_members(SpirVId type_id) const {
   const Annotations *annotations = get_annotations(type_id);
   if (annotations == nullptr) {
     return false;
@@ -1869,7 +1879,7 @@ has_builtin_members(uint32_t type_id) const {
  * Returns the id of a live, canonical declaration of the given type, or 0 if
  * there is none.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 find_type(const ShaderType *type) const {
   ensure_type_map();
   TypeMap::const_iterator tit = _type_map.find(type);
@@ -1890,20 +1900,20 @@ find_type(const ShaderType *type) const {
       }
     }
   }
-  return 0;
+  return SpirVId();
 }
 
 /**
  * Returns the first id carrying the given OpName, or 0 if there is none.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 find_named(const std::string &name) const {
   for (const auto &item : _names) {
     if (item.second == name) {
-      return item.first;
+      return SpirVId(item.first);
     }
   }
-  return 0;
+  return SpirVId();
 }
 
 /**
@@ -1912,21 +1922,21 @@ find_named(const std::string &name) const {
  * map.
  */
 void SpirVModule::
-collect_nested_structs(pmap<uint32_t, const ShaderType::Struct *> &result, uint32_t type_id) const {
+collect_nested_structs(pmap<SpirVId, const ShaderType::Struct *> &result, SpirVId type_id) const {
   const Instruction *decl = get_decl(type_id);
   if (decl == nullptr) {
     return;
   }
   switch (decl->opcode) {
   case spv::OpTypePointer:
-    collect_nested_structs(result, decl->args[2]);
+    collect_nested_structs(result, SpirVId(decl->args[2]));
     break;
 
   case spv::OpTypeArray:
   case spv::OpTypeRuntimeArray:
   case spv::OpTypeVector:
   case spv::OpTypeMatrix:
-    collect_nested_structs(result, decl->args[1]);
+    collect_nested_structs(result, SpirVId(decl->args[1]));
     break;
 
   case spv::OpTypeStruct:
@@ -1937,7 +1947,7 @@ collect_nested_structs(pmap<uint32_t, const ShaderType::Struct *> &result, uint3
         result[type_id] = struct_type;
       }
       for (size_t ai = 1; ai < decl->args.size(); ++ai) {
-        collect_nested_structs(result, decl->args[ai]);
+        collect_nested_structs(result, SpirVId(decl->args[ai]));
       }
     }
     break;
@@ -1951,7 +1961,7 @@ collect_nested_structs(pmap<uint32_t, const ShaderType::Struct *> &result, uint3
  * Returns the name that will be emitted for the given id.
  */
 const std::string &SpirVModule::
-get_name(uint32_t id) const {
+get_name(SpirVId id) const {
   static const std::string empty;
   auto it = _names.find(id);
   return it != _names.end() ? it->second : empty;
@@ -1961,7 +1971,7 @@ get_name(uint32_t id) const {
  * Sets the name emitted for the given id.
  */
 void SpirVModule::
-set_name(uint32_t id, const std::string &name) {
+set_name(SpirVId id, const std::string &name) {
   _names[id] = name;
 }
 
@@ -1969,7 +1979,7 @@ set_name(uint32_t id, const std::string &name) {
  * Returns the name of the given struct member, or an empty string.
  */
 const std::string &SpirVModule::
-get_member_name(uint32_t type_id, uint32_t member_index) const {
+get_member_name(SpirVId type_id, uint32_t member_index) const {
   static const std::string empty;
   auto it = _member_names.find(type_id);
   if (it == _member_names.end() || member_index >= it->second.size()) {
@@ -1982,7 +1992,7 @@ get_member_name(uint32_t type_id, uint32_t member_index) const {
  * Sets the name of the given struct member.
  */
 void SpirVModule::
-set_member_name(uint32_t type_id, uint32_t member_index, const std::string &name) {
+set_member_name(SpirVId type_id, uint32_t member_index, const std::string &name) {
   pvector<std::string> &names = _member_names[type_id];
   if (member_index >= names.size()) {
     names.resize(member_index + 1);
@@ -1999,7 +2009,7 @@ set_member_name(uint32_t type_id, uint32_t member_index, const std::string &name
  * otherwise.
  */
 const std::string &SpirVModule::
-get_reflection_name(uint32_t id) const {
+get_reflection_name(SpirVId id) const {
   auto it = _reflection_names.find(id);
   if (it != _reflection_names.end()) {
     return it->second;
@@ -2013,7 +2023,7 @@ get_reflection_name(uint32_t id) const {
  * variable a qualified name, such as "block.member" after flattening.
  */
 void SpirVModule::
-set_reflection_name(uint32_t id, const std::string &name) {
+set_reflection_name(SpirVId id, const std::string &name) {
   _reflection_names[id] = name;
 }
 
@@ -2022,7 +2032,7 @@ set_reflection_name(uint32_t id, const std::string &name) {
  * into the type resolution, the memoized resolutions are invalidated.
  */
 void SpirVModule::
-decorate(uint32_t id, const Annotation &annotation) {
+decorate(SpirVId id, const Annotation &annotation) {
   _annotations[id].push_back(annotation);
 
   if (is_structural_decoration(annotation.get_decoration())) {
@@ -2034,7 +2044,7 @@ decorate(uint32_t id, const Annotation &annotation) {
  * Adds a member decoration without extra operands.
  */
 void SpirVModule::
-decorate_member(uint32_t type_id, uint32_t member_index, spv::Decoration decoration) {
+decorate_member(SpirVId type_id, uint32_t member_index, spv::Decoration decoration) {
   decorate(type_id, Annotation {spv::OpMemberDecorate,
     {member_index, (uint32_t)decoration}});
 }
@@ -2043,7 +2053,7 @@ decorate_member(uint32_t type_id, uint32_t member_index, spv::Decoration decorat
  * Adds a member decoration with one extra operand.
  */
 void SpirVModule::
-decorate_member(uint32_t type_id, uint32_t member_index, spv::Decoration decoration, uint32_t value) {
+decorate_member(SpirVId type_id, uint32_t member_index, spv::Decoration decoration, uint32_t value) {
   decorate(type_id, Annotation {spv::OpMemberDecorate,
     {member_index, (uint32_t)decoration, value}});
 }
@@ -2053,7 +2063,7 @@ decorate_member(uint32_t type_id, uint32_t member_index, spv::Decoration decorat
  * given id.  Returns true if any was removed.
  */
 bool SpirVModule::
-remove_decoration(uint32_t id, spv::Decoration decoration) {
+remove_decoration(SpirVId id, spv::Decoration decoration) {
   auto it = _annotations.find(id);
   if (it == _annotations.end()) {
     return false;
@@ -2077,7 +2087,7 @@ remove_decoration(uint32_t id, spv::Decoration decoration) {
  * Sets or replaces a single-operand decoration on the given id.
  */
 void SpirVModule::
-set_decoration(uint32_t id, spv::Decoration decoration, uint32_t value) {
+set_decoration(SpirVId id, spv::Decoration decoration, uint32_t value) {
   remove_decoration(id, decoration);
   decorate(id, decoration, value);
 }
@@ -2109,7 +2119,7 @@ strip_decoration(spv::Decoration decoration) {
  * target already has.
  */
 void SpirVModule::
-transfer_annotations(uint32_t from, uint32_t to) {
+transfer_annotations(SpirVId from, SpirVId to) {
   auto it = _annotations.find(from);
   if (it == _annotations.end()) {
     return;
@@ -2129,7 +2139,7 @@ transfer_annotations(uint32_t from, uint32_t to) {
  * Sets or replaces the location decoration of the given id.
  */
 void SpirVModule::
-set_location(uint32_t id, int location) {
+set_location(SpirVId id, int location) {
   remove_decoration(id, spv::DecorationLocation);
   decorate(id, spv::DecorationLocation, (uint32_t)location);
 }
@@ -2144,7 +2154,7 @@ set_location(uint32_t id, int location) {
  * dependent declarations automatically.
  */
 void SpirVModule::
-delete_id(uint32_t id) {
+delete_id(SpirVId id) {
   // Copied, since clearing the state of contained ids may grow the index.
   const IdEntry entry = get_entry(id);
 
@@ -2156,7 +2166,7 @@ delete_id(uint32_t id) {
         continue;
       }
       for (const Instruction &op : _functions[fi].instructions) {
-        uint32_t result_id = op.get_result();
+        SpirVId result_id = op.get_result();
         if (result_id != 0 && result_id != id) {
           clear_id_state(result_id);
         }
@@ -2247,7 +2257,7 @@ delete_id(uint32_t id) {
  * replaces values rewrites the affected instructions itself.
  */
 void SpirVModule::
-replace_type_id(uint32_t before, uint32_t after) {
+replace_type_id(SpirVId before, SpirVId after) {
   nassertv(before != 0u && after != 0u);
   if (before == after) {
     return;
@@ -2274,7 +2284,7 @@ replace_type_id(uint32_t before, uint32_t after) {
  * the recorded result types in the id index.
  */
 void SpirVModule::
-rewrite_type_references(uint32_t before, uint32_t after) {
+rewrite_type_references(SpirVId before, SpirVId after) {
   pvector<size_t> id_operands;
   for (Instruction &op : _globals) {
     if (op.is_nop()) {
@@ -2327,7 +2337,7 @@ rewrite_type_references(uint32_t before, uint32_t after) {
  * Access chains indexing into the struct are the pass's responsibility.
  */
 void SpirVModule::
-delete_struct_member(uint32_t type_id, uint32_t member_index) {
+delete_struct_member(SpirVId type_id, uint32_t member_index) {
   Instruction *decl = get_global(type_id);
   nassertv(decl != nullptr && decl->opcode == spv::OpTypeStruct);
   nassertv(member_index + 1 < decl->args.size());
@@ -2368,7 +2378,7 @@ delete_struct_member(uint32_t type_id, uint32_t member_index) {
  * are merged by deduplicate_types() afterwards.
  */
 void SpirVModule::
-remove_function_parameters(uint32_t type_id, const pset<uint32_t> &param_indices) {
+remove_function_parameters(SpirVId type_id, const pset<uint32_t> &param_indices) {
   if (param_indices.empty()) {
     return;
   }
@@ -2399,7 +2409,7 @@ remove_function_parameters(uint32_t type_id, const pset<uint32_t> &param_indices
       for (Instruction &op : function.instructions) {
         if (op.opcode == spv::OpFunctionParameter) {
           if (param_indices.count(param_index)) {
-            uint32_t param_id = op.get_result();
+            SpirVId param_id = op.get_result();
             op = Instruction(spv::OpNop);
             clear_id_state(param_id);
           }
@@ -2430,7 +2440,7 @@ remove_function_parameters(uint32_t type_id, const pset<uint32_t> &param_indices
  * are removed as well.
  */
 void SpirVModule::
-delete_dead_code(pset<uint32_t> &dead_ids) {
+delete_dead_code(pset<SpirVId> &dead_ids) {
   if (dead_ids.empty()) {
     return;
   }
@@ -2452,30 +2462,30 @@ delete_dead_code(pset<uint32_t> &dead_ids) {
       case spv::OpExpectKHR:
       case spv::OpBitcast:
       case spv::OpCopyLogical:
-        remove = op.args.size() >= 3 && dead_ids.count(op.args[2]) != 0;
+        remove = op.args.size() >= 3 && dead_ids.count(SpirVId(op.args[2])) != 0;
         break;
 
       case spv::OpLoad:
       case spv::OpAtomicLoad:
-        nassertd(op.args.size() < 3 || !dead_ids.count(op.args[2])) {}
+        nassertd(op.args.size() < 3 || !dead_ids.count(SpirVId(op.args[2]))) {}
         break;
 
       case spv::OpStore:
       case spv::OpAtomicStore:
-        nassertd(op.args.empty() || !dead_ids.count(op.args[0])) {}
+        nassertd(op.args.empty() || !dead_ids.count(SpirVId(op.args[0]))) {}
         break;
 
       case spv::OpCopyMemory:
       case spv::OpCopyMemorySized:
-        nassertd(op.args.size() < 2 || (!dead_ids.count(op.args[0]) &&
-                                        !dead_ids.count(op.args[1]))) {}
+        nassertd(op.args.size() < 2 || (!dead_ids.count(SpirVId(op.args[0])) &&
+                                        !dead_ids.count(SpirVId(op.args[1])))) {}
         break;
 
       default:
         break;
       }
 
-      uint32_t result_id = op.get_result();
+      SpirVId result_id = op.get_result();
       if (!remove && result_id != 0 && dead_ids.count(result_id)) {
         remove = true;
       }
@@ -2532,7 +2542,7 @@ deduplicate_types() {
       // This may in turn make downstream declarations identical, which the
       // rest of this scan picks up, since the rewrite has already been
       // applied by the time they are visited.
-      replace_type_id(op.args[0], result.first->second);
+      replace_type_id(SpirVId(op.args[0]), SpirVId(result.first->second));
     }
   }
 }
@@ -2543,7 +2553,7 @@ deduplicate_types() {
  * transfers or reassigns those as appropriate.
  */
 void SpirVModule::
-reassign_global_id(uint32_t old_id, uint32_t new_id) {
+reassign_global_id(SpirVId old_id, SpirVId new_id) {
   IdEntry entry = get_entry(old_id);
   nassertv(entry._global_index >= 0 && (size_t)entry._global_index < _globals.size());
   nassertv(new_id != 0 && new_id < _id_bound);
@@ -2569,7 +2579,7 @@ void SpirVModule::
 add_global(Instruction op) {
   int32_t index = (int32_t)_globals.size();
   _globals.push_back(std::move(op));
-  record_result_at(_globals.back(), 0, index);
+  record_result_at(_globals.back(), SpirVId(), index);
 }
 
 /**
@@ -2613,8 +2623,8 @@ set_memory_model(spv::AddressingModel addressing, spv::MemoryModel memory) {
  * Adds an entry point for the given function.
  */
 void SpirVModule::
-add_entry_point(spv::ExecutionModel model, uint32_t function_id,
-                const std::string &name, pvector<uint32_t> interface_vars) {
+add_entry_point(spv::ExecutionModel model, SpirVId function_id,
+                const std::string &name, pvector<SpirVId> interface_vars) {
   EntryPoint ep;
   ep.model = model;
   ep.function_id = function_id;
@@ -2627,7 +2637,7 @@ add_entry_point(spv::ExecutionModel model, uint32_t function_id,
  * Adds an execution mode for the given entry point function.
  */
 void SpirVModule::
-add_execution_mode(uint32_t function_id, spv::ExecutionMode mode,
+add_execution_mode(SpirVId function_id, spv::ExecutionMode mode,
                    std::initializer_list<uint32_t> args) {
   Instruction op(spv::OpExecutionMode, {function_id, (uint32_t)mode});
   op.args.insert(op.args.end(), args.begin(), args.end());
@@ -2637,12 +2647,12 @@ add_execution_mode(uint32_t function_id, spv::ExecutionMode mode,
 /**
  * Adds an OpString with the given contents and returns its id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 add_string(const std::string &str) {
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   Instruction op(spv::OpString, {id});
   pack_string(op.args, str);
-  record_result(op, 0);
+  record_result(op, SpirVId());
   _debug.push_back(std::move(op));
   return id;
 }
@@ -2650,17 +2660,17 @@ add_string(const std::string &str) {
 /**
  * Adds an OpExtInstImport with the given set name and returns its id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 add_ext_inst_import(const std::string &name) {
   for (const Instruction &op : _ext_inst_imports) {
     if (op.get_string(1) == name) {
-      return op.args[0];
+      return SpirVId(op.args[0]);
     }
   }
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   Instruction op(spv::OpExtInstImport, {id});
   pack_string(op.args, name);
-  record_result(op, 0);
+  record_result(op, SpirVId());
   _ext_inst_imports.push_back(std::move(op));
   return id;
 }
@@ -2670,7 +2680,7 @@ add_ext_inst_import(const std::string &name) {
  * given execution model, if it is not already listed.
  */
 void SpirVModule::
-add_to_interfaces(spv::ExecutionModel model, uint32_t var_id) {
+add_to_interfaces(spv::ExecutionModel model, SpirVId var_id) {
   for (EntryPoint &ep : _entry_points) {
     if (ep.model == model &&
         std::find(ep.interface_vars.begin(), ep.interface_vars.end(), var_id) == ep.interface_vars.end()) {
@@ -2684,11 +2694,12 @@ add_to_interfaces(spv::ExecutionModel model, uint32_t var_id) {
  * exists and is part of the interface of all entry points with the given
  * execution model, and returns its id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin) {
-  uint32_t var_id = 0;
-  for (uint32_t id = 0; id < _ids.size(); ++id) {
-    const IdEntry &entry = _ids[id];
+  SpirVId var_id;
+  for (uint32_t word = 0; word < _ids.size(); ++word) {
+    SpirVId id(word);
+    const IdEntry &entry = _ids[word];
     if (entry._kind == IdKind::VARIABLE && entry._function_id == 0 &&
         get_storage_class(id) == spv::StorageClassInput &&
         get_builtin(id) == builtin) {
@@ -2750,8 +2761,8 @@ ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin) {
 
     default:
       // Unhandled / invalid input
-      nassertr(false, 0);
-      return 0;
+      nassertr(false, SpirVId());
+      return SpirVId();
     }
 
     var_id = define_variable(type, spv::StorageClassInput);
@@ -2766,9 +2777,9 @@ ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin) {
  * Ensures that the given type is declared, adding declarations to the
  * globals section as necessary, and returns its id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_type(const ShaderType *type) {
-  uint32_t id = find_type(type);
+  SpirVId id = find_type(type);
   if (id != 0) {
     return id;
   }
@@ -2808,14 +2819,14 @@ define_type(const ShaderType *type) {
     }
   }
   else if (const ShaderType::Vector *vector_type = type->as_vector()) {
-    uint32_t component_type = define_type(
+    SpirVId component_type = define_type(
       ShaderType::register_type(ShaderType::Scalar(vector_type->get_scalar_type())));
 
     add_global(Instruction(spv::OpTypeVector,
       {id, component_type, vector_type->get_num_components()}));
   }
   else if (const ShaderType::Matrix *matrix_type = type->as_matrix()) {
-    uint32_t row_type = define_type(
+    SpirVId row_type = define_type(
       ShaderType::register_type(ShaderType::Vector(matrix_type->get_scalar_type(), matrix_type->get_num_columns())));
 
     add_global(Instruction(spv::OpTypeMatrix,
@@ -2828,7 +2839,7 @@ define_type(const ShaderType *type) {
 
     for (size_t i = 0; i < num_members; ++i) {
       const ShaderType::Struct::Member &member = struct_type->get_member(i);
-      uint32_t member_type_id = define_type(member.type);
+      SpirVId member_type_id = define_type(member.type);
       op.args.push_back(member_type_id);
     }
 
@@ -2844,11 +2855,11 @@ define_type(const ShaderType *type) {
     }
   }
   else if (const ShaderType::Array *array_type = type->as_array()) {
-    uint32_t element_type = define_type(array_type->get_element_type());
+    SpirVId element_type = define_type(array_type->get_element_type());
 
     auto size = array_type->get_num_elements();
     if (size != 0) {
-      uint32_t constant_id = define_int_constant(size);
+      SpirVId constant_id = define_int_constant(size);
       add_global(Instruction(spv::OpTypeArray, {id, element_type, constant_id}));
     } else {
       add_global(Instruction(spv::OpTypeRuntimeArray, {id, element_type}));
@@ -2865,7 +2876,7 @@ define_type(const ShaderType *type) {
 
     // Sampled image, depthness 1 if shadow sampler
     uint32_t depth = sampled_image_type->is_shadow() ? (uint32_t)1 : (uint32_t)0;
-    uint32_t image_id = define_image_type(image_type, depth, 1, spv::ImageFormatUnknown);
+    SpirVId image_id = define_image_type(image_type, depth, 1, spv::ImageFormatUnknown);
 
     // If the module already declares a sampled image type for this image
     // type (which is possible even on a type map miss, since multiple
@@ -2892,10 +2903,10 @@ define_type(const ShaderType *type) {
  * Declares a new image type with the given extra properties (which are not
  * stored on ShaderType).
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_image_type(const ShaderType *type, uint32_t depth, uint32_t sampled, spv::ImageFormat format) {
   const ShaderType::Image *image_type = type->as_image();
-  nassertr(image_type != nullptr, 0u);
+  nassertr(image_type != nullptr, SpirVId());
 
   const ShaderType *sampled_scalar_type =
     ShaderType::register_type(ShaderType::Scalar(image_type->get_sampled_type()));
@@ -2970,7 +2981,7 @@ define_image_type(const ShaderType *type, uint32_t depth, uint32_t sampled, spv:
   // If the module already declares a type with these exact operands, this
   // creates a duplicate, which deduplicate_types() merges before the module
   // is emitted.
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
 
   args[0] = id;
   args[1] = define_type(sampled_scalar_type);
@@ -2992,9 +3003,9 @@ define_image_type(const ShaderType *type, uint32_t depth, uint32_t sampled, spv:
  * Ensures that a pointer type to the given (already declared) type with the
  * given storage class is declared, and returns its id.
  */
-uint32_t SpirVModule::
-define_pointer_type(uint32_t type_id, spv::StorageClass storage_class) {
-  nassertr_always(type_id != 0u, 0u);
+SpirVId SpirVModule::
+define_pointer_type(SpirVId type_id, spv::StorageClass storage_class) {
+  nassertr_always(type_id != 0u, SpirVId());
 
   // The comparison is against the storage class as declared, not the
   // canonicalized one that get_storage_class reports: pointer types are
@@ -3004,11 +3015,11 @@ define_pointer_type(uint32_t type_id, spv::StorageClass storage_class) {
     if (op.opcode == spv::OpTypePointer && op.args.size() >= 3 &&
         op.args[2] == type_id &&
         op.args[1] == (uint32_t)storage_class) {
-      return op.args[0];
+      return SpirVId(op.args[0]);
     }
   }
 
-  uint32_t pointer_type_id = allocate_id();
+  SpirVId pointer_type_id = allocate_id();
   add_global(Instruction(spv::OpTypePointer,
     {pointer_type_id, (uint32_t)storage_class, type_id}));
   return pointer_type_id;
@@ -3018,7 +3029,7 @@ define_pointer_type(uint32_t type_id, spv::StorageClass storage_class) {
  * Ensures that a pointer type to the given type with the given storage class
  * is declared, and returns its id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_pointer_type(const ShaderType *type, spv::StorageClass storage_class) {
   return define_pointer_type(define_type(type), storage_class);
 }
@@ -3027,22 +3038,22 @@ define_pointer_type(const ShaderType *type, spv::StorageClass storage_class) {
  * Ensures that a function type with the given return type is declared, and
  * returns its id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_function_type(const ShaderType *return_type) {
   //TODO: right now we only handle the case of void with no parameters.
-  nassertr(return_type == nullptr, 0);
+  nassertr(return_type == nullptr, SpirVId());
 
   for (const Instruction &op : _globals) {
     if (op.opcode == spv::OpTypeFunction && op.args.size() == 2) {
-      const Instruction *return_decl = get_decl(op.args[1]);
+      const Instruction *return_decl = get_decl(SpirVId(op.args[1]));
       if (return_decl != nullptr && return_decl->opcode == spv::OpTypeVoid) {
-        return op.args[0];
+        return SpirVId(op.args[0]);
       }
     }
   }
 
-  uint32_t return_type_id = define_type(return_type);
-  uint32_t function_type_id = allocate_id();
+  SpirVId return_type_id = define_type(return_type);
+  SpirVId function_type_id = allocate_id();
   add_global(Instruction(spv::OpTypeFunction, {function_type_id, return_type_id}));
   return function_type_id;
 }
@@ -3052,10 +3063,10 @@ define_function_type(const ShaderType *return_type) {
  * declarations and layout annotations that may be necessary, and returns its
  * id.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_variable(const ShaderType *type, spv::StorageClass storage_class) {
-  uint32_t pointer_type_id = define_pointer_type(type, storage_class);
-  uint32_t variable_id = allocate_id();
+  SpirVId pointer_type_id = define_pointer_type(type, storage_class);
+  SpirVId variable_id = allocate_id();
 
   add_global(Instruction(spv::OpVariable, {
     pointer_type_id,
@@ -3079,7 +3090,7 @@ define_variable(const ShaderType *type, spv::StorageClass storage_class) {
  * out using offsets and strides.
  */
 void SpirVModule::
-r_annotate_struct_layout(uint32_t type_id) {
+r_annotate_struct_layout(SpirVId type_id) {
   const Instruction *decl = get_decl(type_id);
   nassertv(decl != nullptr);
 
@@ -3092,7 +3103,7 @@ r_annotate_struct_layout(uint32_t type_id) {
       nassertv(array_type != nullptr);
       decorate(type_id, spv::DecorationArrayStride, array_type->get_stride_bytes());
     }
-    r_annotate_struct_layout(decl->args[1]);
+    r_annotate_struct_layout(SpirVId(decl->args[1]));
     return;
   }
 
@@ -3116,7 +3127,7 @@ r_annotate_struct_layout(uint32_t type_id) {
     // Unwrap arrays to see if there's a matrix here.  Note that decl may be
     // refetched, since decorate() may not keep instruction pointers valid...
     // it does today, but this stays on the safe side of the contract.
-    uint32_t member_type_id = get_member_type_id(type_id, i);
+    SpirVId member_type_id = get_member_type_id(type_id, i);
     const ShaderType *base_type = member.type;
     while (const ShaderType::Array *array_type = base_type->as_array()) {
       base_type = array_type->get_element_type();
@@ -3127,7 +3138,7 @@ r_annotate_struct_layout(uint32_t type_id) {
       }
       const Instruction *member_decl = get_decl(member_type_id);
       nassertv(member_decl != nullptr && member_decl->args.size() >= 2);
-      member_type_id = member_decl->args[1];
+      member_type_id = SpirVId(member_decl->args[1]);
     }
 
     if (const ShaderType::Matrix *matrix_type = base_type->as_matrix()) {
@@ -3147,7 +3158,7 @@ r_annotate_struct_layout(uint32_t type_id) {
  * existing one if one is already defined (except for OpConstantNull, which
  * can't be used to index structure members).
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_int_constant(int32_t constant) {
   for (const Instruction &op : _globals) {
     if (op.opcode != spv::OpConstant || op.args.size() != 3 ||
@@ -3156,17 +3167,17 @@ define_int_constant(int32_t constant) {
     }
     // Skip constants of a non-canonical type declaration (eg. a 16-bit int),
     // which cannot be reused interchangeably with a plain int constant.
-    const Instruction *type_decl = get_decl(op.args[0]);
+    const Instruction *type_decl = get_decl(SpirVId(op.args[0]));
     if (type_decl != nullptr && type_decl->opcode == spv::OpTypeInt &&
         type_decl->args.size() == 3 && type_decl->args[1] == 32) {
       if (type_decl->args[2] != 0 || constant >= 0) {
-        return op.args[1];
+        return SpirVId(op.args[1]);
       }
     }
   }
 
-  uint32_t type_id = define_type(ShaderType::INT);
-  uint32_t constant_id = allocate_id();
+  SpirVId type_id = define_type(ShaderType::INT);
+  SpirVId constant_id = allocate_id();
 
   add_global(Instruction(spv::OpConstant, {type_id, constant_id, (uint32_t)constant}));
   return constant_id;
@@ -3176,18 +3187,18 @@ define_int_constant(int32_t constant) {
  * Defines a new null constant of the given type, reusing an existing one if
  * one is already defined.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_null_constant(const ShaderType *type) {
-  uint32_t type_id = define_type(type);
+  SpirVId type_id = define_type(type);
 
   for (const Instruction &op : _globals) {
     if (op.opcode == spv::OpConstantNull && op.args.size() >= 2 &&
         op.args[0] == type_id) {
-      return op.args[1];
+      return SpirVId(op.args[1]);
     }
   }
 
-  uint32_t constant_id = allocate_id();
+  SpirVId constant_id = allocate_id();
   add_global(Instruction(spv::OpConstantNull, {type_id, constant_id}));
   return constant_id;
 }
@@ -3195,11 +3206,11 @@ define_null_constant(const ShaderType *type) {
 /**
  * Defines a new constant.  Does not attempt to reuse constants.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_constant(const ShaderType *type, uint32_t constant) {
-  uint32_t type_id = define_type(type);
+  SpirVId type_id = define_type(type);
 
-  uint32_t constant_id = allocate_id();
+  SpirVId constant_id = allocate_id();
   if (type == ShaderType::BOOL) {
     add_global(Instruction(constant ? spv::OpConstantTrue : spv::OpConstantFalse,
                            {type_id, constant_id}));
@@ -3213,11 +3224,11 @@ define_constant(const ShaderType *type, uint32_t constant) {
  * Defines a new spec constant.  Follow up with a call to decorate() to set
  * the SpecId.
  */
-uint32_t SpirVModule::
+SpirVId SpirVModule::
 define_spec_constant(const ShaderType *type, uint32_t def_value) {
-  uint32_t type_id = define_type(type);
+  SpirVId type_id = define_type(type);
 
-  uint32_t id = allocate_id();
+  SpirVId id = allocate_id();
   if (type == ShaderType::BOOL) {
     add_global(Instruction(def_value ? spv::OpSpecConstantTrue : spv::OpSpecConstantFalse, {type_id, id}));
   } else {
@@ -3230,7 +3241,7 @@ define_spec_constant(const ShaderType *type, uint32_t def_value) {
  * Writes a simple description of the given id to the output stream.
  */
 void SpirVModule::
-output_id(std::ostream &out, uint32_t id) const {
+output_id(std::ostream &out, SpirVId id) const {
   const IdEntry &entry = get_entry(id);
   switch (entry._kind) {
   case IdKind::NONE:
@@ -3304,14 +3315,14 @@ output_id(std::ostream &out, uint32_t id) const {
 /**
  * Issues an error about the given id.  Returns 0.
  */
-uint32_t SpirVModule::
-error_expected(uint32_t id, const char *msg) const {
+SpirVId SpirVModule::
+error_expected(SpirVId id, const char *msg) const {
   std::ostringstream str;
   str << id << " (";
   output_id(str, id);
   str << ") was expected to be " << msg << "\n";
   nassert_raise(str.str());
-  return 0u;
+  return SpirVId();
 }
 
 /**

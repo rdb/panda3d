@@ -97,16 +97,16 @@ get_id_bound() const {
 /**
  * Allocates a fresh identifier and returns it.  Ids are never reused.
  */
-INLINE uint32_t SpirVModule::
+INLINE SpirVId SpirVModule::
 allocate_id() {
-  return _id_bound++;
+  return SpirVId(_id_bound++);
 }
 
 /**
  * Returns what kind of thing the given id refers to.
  */
 INLINE SpirVModule::IdKind SpirVModule::
-get_kind(uint32_t id) const {
+get_kind(SpirVId id) const {
   return get_entry(id)._kind;
 }
 
@@ -115,7 +115,7 @@ get_kind(uint32_t id) const {
  * types).
  */
 INLINE bool SpirVModule::
-is_type(uint32_t id) const {
+is_type(SpirVId id) const {
   IdKind kind = get_entry(id)._kind;
   return kind == IdKind::TYPE || kind == IdKind::POINTER_TYPE ||
          kind == IdKind::FUNCTION_TYPE;
@@ -125,8 +125,8 @@ is_type(uint32_t id) const {
  * Returns the id of the function the given id is declared in, or 0 if it is
  * declared at module scope.  For a function, returns the function's own id.
  */
-INLINE uint32_t SpirVModule::
-get_function_id(uint32_t id) const {
+INLINE SpirVId SpirVModule::
+get_function_id(SpirVId id) const {
   return get_entry(id)._function_id;
 }
 
@@ -135,7 +135,7 @@ get_function_id(uint32_t id) const {
  * out of range.
  */
 INLINE const SpirVModule::IdEntry &SpirVModule::
-get_entry(uint32_t id) const {
+get_entry(SpirVId id) const {
   if (id >= _ids.size()) {
     static const IdEntry default_entry;
     return default_entry;
@@ -148,7 +148,7 @@ get_entry(uint32_t id) const {
  * needed.  May invalidate existing entry references.
  */
 INLINE SpirVModule::IdEntry &SpirVModule::
-modify_entry(uint32_t id) {
+modify_entry(SpirVId id) {
   if (id >= _ids.size()) {
     _ids.resize(id + 1);
   }
@@ -159,7 +159,7 @@ modify_entry(uint32_t id) {
  * Looks up the given string.
  */
 INLINE std::string SpirVModule::
-resolve_string(uint32_t id) const {
+resolve_string(SpirVId id) const {
   if (get_entry(id)._kind != IdKind::STRING) {
     error_expected(id, "a string");
     return std::string();
@@ -176,7 +176,7 @@ resolve_string(uint32_t id) const {
  * Returns the location decoration of the given id, or -1 if it has none.
  */
 INLINE int SpirVModule::
-get_location(uint32_t id) const {
+get_location(SpirVId id) const {
   return has_decoration(id, spv::DecorationLocation)
     ? (int)get_decoration(id, spv::DecorationLocation)
     : -1;
@@ -187,7 +187,7 @@ get_location(uint32_t id) const {
  * has none.
  */
 INLINE spv::BuiltIn SpirVModule::
-get_builtin(uint32_t id) const {
+get_builtin(SpirVId id) const {
   return (spv::BuiltIn)get_decoration(id, spv::DecorationBuiltIn,
                                       (uint32_t)spv::BuiltInMax);
 }
@@ -196,7 +196,7 @@ get_builtin(uint32_t id) const {
  * Returns the SpecId decoration of the given id, or 0 if it has none.
  */
 INLINE uint32_t SpirVModule::
-get_spec_id(uint32_t id) const {
+get_spec_id(SpirVId id) const {
   return get_decoration(id, spv::DecorationSpecId, 0);
 }
 
@@ -205,7 +205,7 @@ get_spec_id(uint32_t id) const {
  * none.
  */
 INLINE uint32_t SpirVModule::
-get_array_stride(uint32_t type_id) const {
+get_array_stride(SpirVId type_id) const {
   return get_decoration(type_id, spv::DecorationArrayStride, 0);
 }
 
@@ -214,7 +214,7 @@ get_array_stride(uint32_t type_id) const {
  * none.
  */
 INLINE int SpirVModule::
-get_member_offset(uint32_t type_id, uint32_t member_index) const {
+get_member_offset(SpirVId type_id, uint32_t member_index) const {
   return has_member_decoration(type_id, member_index, spv::DecorationOffset)
     ? (int)get_member_decoration(type_id, member_index, spv::DecorationOffset)
     : -1;
@@ -225,7 +225,7 @@ get_member_offset(uint32_t type_id, uint32_t member_index) const {
  * spv::BuiltInMax if it has none.
  */
 INLINE spv::BuiltIn SpirVModule::
-get_member_builtin(uint32_t type_id, uint32_t member_index) const {
+get_member_builtin(SpirVId type_id, uint32_t member_index) const {
   return (spv::BuiltIn)get_member_decoration(type_id, member_index,
     spv::DecorationBuiltIn, (uint32_t)spv::BuiltInMax);
 }
@@ -234,7 +234,7 @@ get_member_builtin(uint32_t type_id, uint32_t member_index) const {
  * Adds a decoration without extra operands to the given id.
  */
 INLINE void SpirVModule::
-decorate(uint32_t id, spv::Decoration decoration) {
+decorate(SpirVId id, spv::Decoration decoration) {
   decorate(id, Annotation {spv::OpDecorate, {(uint32_t)decoration}});
 }
 
@@ -242,7 +242,7 @@ decorate(uint32_t id, spv::Decoration decoration) {
  * Adds a decoration with one extra operand to the given id.
  */
 INLINE void SpirVModule::
-decorate(uint32_t id, spv::Decoration decoration, uint32_t value) {
+decorate(SpirVId id, spv::Decoration decoration, uint32_t value) {
   decorate(id, Annotation {spv::OpDecorate, {(uint32_t)decoration, value}});
 }
 
@@ -250,7 +250,7 @@ decorate(uint32_t id, spv::Decoration decoration, uint32_t value) {
  * Returns the annotations attached to the given id, or null if it has none.
  */
 INLINE const SpirVModule::Annotations *SpirVModule::
-get_annotations(uint32_t id) const {
+get_annotations(SpirVId id) const {
   auto it = _annotations.find(id);
   return it != _annotations.end() ? &it->second : nullptr;
 }
@@ -260,7 +260,7 @@ get_annotations(uint32_t id) const {
  * that type, ie. declared the same way define_type(...) would declare it.
  */
 INLINE bool SpirVModule::
-is_canonical_type(uint32_t type_id) const {
+is_canonical_type(SpirVId type_id) const {
   ensure_type_map();
   const ShaderType *type = get_entry(type_id)._type;
   if (type == nullptr) {
@@ -273,7 +273,7 @@ is_canonical_type(uint32_t type_id) const {
 /**
  * Defines a new constant of type float.
  */
-INLINE uint32_t SpirVModule::
+INLINE SpirVId SpirVModule::
 define_float_constant(float constant) {
   union {
     float f;

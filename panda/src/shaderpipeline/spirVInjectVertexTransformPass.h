@@ -59,16 +59,16 @@ public:
   virtual void run(SpirVModule &module) override;
 
 private:
-  void inject_animation(SpirVBuilder &builder, const pvector<uint32_t> &vars);
-  void inject_animation_noop(SpirVBuilder &builder, const pvector<uint32_t> &vars);
+  void inject_animation(SpirVBuilder &builder, const pvector<SpirVId> &vars);
+  void inject_animation_noop(SpirVBuilder &builder, const pvector<SpirVId> &vars);
   void inject_instancing(SpirVBuilder &builder);
   void inject_instancing_noop(SpirVBuilder &builder);
 
   void define_transform_block();
   static const ShaderType *make_transform_block_type(uint32_t num_elements);
 
-  pvector<uint32_t> make_interface(const pvector<uint32_t> &vars,
-                                   bool with_animation, bool with_instancing) const;
+  pvector<SpirVId> make_interface(const pvector<SpirVId> &vars,
+                                  bool with_animation, bool with_instancing) const;
 
   SpirVModule *_module = nullptr;
 
@@ -76,36 +76,36 @@ public:
   // Settings that could be related to both instancing and animation.
   struct EntryPoint {
     std::string _name;
-    pvector<uint32_t> _vars;
+    pvector<SpirVId> _vars;
   };
-  pmap<uint32_t, EntryPoint> _todo_entry_points;
+  pmap<SpirVId, EntryPoint> _todo_entry_points;
   bool _make_new_entry_points = false;
-  uint32_t _transform_block_var_id = 0;
+  SpirVId _transform_block_var_id;
   uint32_t _transform_block_binding = 0;
   uint32_t _transform_block_set = 0;
   bool _use_ssbo = false;
-  pset<uint32_t> _make_private_pointers;
+  pset<SpirVId> _make_private_pointers;
 
   // Settings related to animation.
   uint32_t _anim_locations = 0;
   uint32_t _anim_point_locations = 0;
   int _transform_index_location = -1;
   int _transform_weight_location = -1;
-  uint32_t _transform_index_var_id = 0;
-  uint32_t _transform_weight_var_id = 0;
-  pmap<uint32_t, uint32_t> _vertex_input_ids;
-  uint32_t _transform_offset_var_id = 0;
+  SpirVId _transform_index_var_id;
+  SpirVId _transform_weight_var_id;
+  pmap<SpirVId, SpirVId> _vertex_input_ids;
+  SpirVId _transform_offset_var_id;
 
   // Settings related to instancing.
   struct MatrixVar {
-    uint32_t _id;
+    SpirVId _id;
     bool _inverse;
     bool _transpose;
   };
-  pmap<uint32_t, MatrixVar> _matrix_vars;
+  pmap<SpirVId, MatrixVar> _matrix_vars;
   int _instance_mat_location = -1;
-  uint32_t _instance_mat_var_id = 0;
-  uint32_t _instance_index_var_id = 0;
+  SpirVId _instance_mat_var_id;
+  SpirVId _instance_index_var_id;
 };
 
 #endif

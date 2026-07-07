@@ -68,7 +68,8 @@ validate() const {
     consistent = false;
   };
 
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < get_id_bound(); ++word) {
+    SpirVId id(word);
     SpirVModule::IdKind kind = _module.get_kind(id);
     SpirVModule::IdKind fresh_kind = fresh.get_kind(id);
 
@@ -87,8 +88,8 @@ validate() const {
         kind != SpirVModule::IdKind::STRING) {
       // The index mirrors the result type operand for values; the mirror
       // must match what the instructions say.
-      uint32_t type_id = _module.get_type_id(id);
-      uint32_t fresh_type_id = fresh.get_type_id(id);
+      SpirVId type_id = _module.get_type_id(id);
+      SpirVId fresh_type_id = fresh.get_type_id(id);
       if (type_id != fresh_type_id) {
         report(id, "type id", type_id, fresh_type_id);
       }
@@ -150,7 +151,7 @@ validate() const {
   // annotation forms embed ids in their operands, and execution modes can
   // reference constants; a pass that deletes an id these refer to must
   // remove them itself, which is easy to forget.  Sweep for danglers.
-  auto check_reference = [&](uint32_t id, const char *referrer, uint32_t referrer_id) {
+  auto check_reference = [&](SpirVId id, const char *referrer, uint32_t referrer_id) {
     if (id == 0 || id >= get_id_bound() ||
         _module.get_kind(id) == SpirVModule::IdKind::NONE) {
       shader_cat.error()
@@ -160,8 +161,8 @@ validate() const {
     }
   };
 
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const SpirVModule::Annotations *annotations = _module.get_annotations(id);
+  for (uint32_t word = 0; word < get_id_bound(); ++word) {
+    const SpirVModule::Annotations *annotations = _module.get_annotations(SpirVId(word));
     if (annotations == nullptr) {
       continue;
     }
@@ -170,21 +171,21 @@ validate() const {
       case spv::OpDecorateId:
         // Every operand after the decoration is an id.
         for (size_t ai = 1; ai < annotation.args.size(); ++ai) {
-          check_reference(annotation.args[ai], "OpDecorateId", id);
+          check_reference(SpirVId(annotation.args[ai]), "OpDecorateId", word);
         }
         break;
 
       case spv::OpGroupDecorate:
         // Every operand is a decoration target.
         for (size_t ai = 0; ai < annotation.args.size(); ++ai) {
-          check_reference(annotation.args[ai], "OpGroupDecorate", id);
+          check_reference(SpirVId(annotation.args[ai]), "OpGroupDecorate", word);
         }
         break;
 
       case spv::OpGroupMemberDecorate:
         // Pairs of target id and member index.
         for (size_t ai = 0; ai + 1 < annotation.args.size(); ai += 2) {
-          check_reference(annotation.args[ai], "OpGroupMemberDecorate", id);
+          check_reference(SpirVId(annotation.args[ai]), "OpGroupMemberDecorate", word);
         }
         break;
 
@@ -198,11 +199,11 @@ validate() const {
     if (op.args.empty()) {
       continue;
     }
-    check_reference(op.args[0], "an execution mode", op.args[0]);
+    check_reference(SpirVId(op.args[0]), "an execution mode", op.args[0]);
     if (op.opcode == spv::OpExecutionModeId) {
       // Every operand after the mode is an id (eg. LocalSizeId constants).
       for (size_t ai = 2; ai < op.args.size(); ++ai) {
-        check_reference(op.args[ai], "OpExecutionModeId", op.args[0]);
+        check_reference(SpirVId(op.args[ai]), "OpExecutionModeId", op.args[0]);
       }
     }
   }
@@ -221,7 +222,8 @@ assign_interface_locations(ShaderModule::Stage stage) {
   BitArray input_locations;
   BitArray output_locations;
 
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < get_id_bound(); ++word) {
+    SpirVId id(word);
     if (_module.get_kind(id) != SpirVModule::IdKind::VARIABLE ||
         _module.get_function_id(id) != 0) {
       continue;
@@ -250,7 +252,8 @@ assign_interface_locations(ShaderModule::Stage stage) {
     return;
   }
 
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < get_id_bound(); ++word) {
+    SpirVId id(word);
     if (_module.get_kind(id) != SpirVModule::IdKind::VARIABLE ||
         _module.get_function_id(id) != 0 ||
         _module.get_location(id) >= 0 ||
@@ -325,7 +328,7 @@ assign_interface_locations(ShaderModule::Stage stage) {
 void SpirVTransformer::
 assign_locations(pmap<uint32_t, int> remap) {
   for (const auto &item : remap) {
-    _module.set_location(item.first, item.second);
+    _module.set_location(SpirVId(item.first), item.second);
   }
 }
 
@@ -334,7 +337,8 @@ assign_locations(pmap<uint32_t, int> remap) {
  */
 void SpirVTransformer::
 assign_flat_decorations() {
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < get_id_bound(); ++word) {
+    SpirVId id(word);
     if (_module.get_kind(id) != SpirVModule::IdKind::VARIABLE ||
         _module.get_function_id(id) != 0 ||
         _module.get_builtin(id) != spv::BuiltInMax ||
@@ -370,7 +374,7 @@ assign_procedural_names(const char *prefix, const pmap<uint32_t, int> &suffixes)
   char buffer[32];
   for (const auto &item : suffixes) {
     sprintf(buffer, "%d", item.second);
-    _module.set_name(item.first, std::string(prefix) + buffer);
+    _module.set_name(SpirVId(item.first), std::string(prefix) + buffer);
   }
 }
 
@@ -379,7 +383,8 @@ assign_procedural_names(const char *prefix, const pmap<uint32_t, int> &suffixes)
  */
 void SpirVTransformer::
 strip_uniform_locations() {
-  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+  for (uint32_t word = 0; word < get_id_bound(); ++word) {
+    SpirVId id(word);
     if (_module.get_kind(id) == SpirVModule::IdKind::VARIABLE &&
         _module.get_function_id(id) == 0 &&
         _module.get_storage_class(id) == spv::StorageClassUniformConstant) {
@@ -404,8 +409,8 @@ strip_bindings() {
 void SpirVTransformer::
 bind_descriptor_set(uint32_t set, const pvector<uint32_t> &ids) {
   for (uint32_t binding = 0; binding < ids.size(); ++binding) {
-    uint32_t id = ids[binding];
-    if (id > 0) {
+    SpirVId id(ids[binding]);
+    if (id != 0) {
       _module.set_decoration(id, spv::DecorationDescriptorSet, set);
       _module.set_decoration(id, spv::DecorationBinding, binding);
     }

@@ -20,6 +20,7 @@
 
 using Instruction = ShaderModuleSpirV::Instruction;
 using InstructionStream = ShaderModuleSpirV::InstructionStream;
+using Id = SpirVId;
 
 /**
  * Creates an empty module with the standard capability and memory model.
@@ -37,11 +38,11 @@ make_module() {
  * point for the given execution model, and returns the function id.  The
  * given variables are added to the entry point interface.
  */
-inline uint32_t
+inline Id
 add_main(SpirVModule &module, spv::ExecutionModel model = spv::ExecutionModelFragment,
-         pvector<uint32_t> interface_vars = {}, const char *name = "main") {
+         pvector<Id> interface_vars = {}, const char *name = "main") {
   SpirVBuilder builder(module);
-  uint32_t function_id = builder.op_function(nullptr);
+  Id function_id = builder.op_function(nullptr);
   builder.op_label();
   builder.op_return();
   builder.op_function_end();
@@ -58,7 +59,7 @@ add_main(SpirVModule &module, spv::ExecutionModel model = spv::ExecutionModelFra
  * with add_main.
  */
 inline SpirVBuilder
-builder_before_return(SpirVModule &module, uint32_t function_id) {
+builder_before_return(SpirVModule &module, Id function_id) {
   SpirVModule::Function *function = module.get_function(function_id);
   size_t index = function->instructions.size();
   while (index > 0 && function->instructions[index - 1].opcode != spv::OpReturn) {

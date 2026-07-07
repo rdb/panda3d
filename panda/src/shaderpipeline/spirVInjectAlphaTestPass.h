@@ -44,12 +44,12 @@ public:
   const int _ref_location;
   const bool _spec_constant;
 
-  uint32_t _alpha_ref_var_id = 0;
+  SpirVId _alpha_ref_var_id;
 
   // The result ids of the injected comparison ops, one per return statement.
   // A consumer that patches the comparison opcode in the resulting module
   // must locate the instructions by these ids.
-  pvector<uint32_t> _compare_op_ids;
+  pvector<SpirVId> _compare_op_ids;
 };
 
 #endif

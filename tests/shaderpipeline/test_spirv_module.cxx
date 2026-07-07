@@ -32,18 +32,18 @@ namespace {
  */
 class DeleteVariablesPass final : public SpirVTransformPass {
 public:
-  DeleteVariablesPass(pset<uint32_t> ids) : _ids(std::move(ids)) {}
+  DeleteVariablesPass(pset<Id> ids) : _ids(std::move(ids)) {}
 
   virtual void run(SpirVModule &module) override {
-    pset<uint32_t> dead = _ids;
-    for (uint32_t id : _ids) {
+    pset<Id> dead = _ids;
+    for (Id id : _ids) {
       module.delete_id(id);
     }
     module.delete_dead_code(dead);
   }
 
 private:
-  const pset<uint32_t> _ids;
+  const pset<Id> _ids;
 };
 
 /**
@@ -52,11 +52,11 @@ private:
  */
 class RemoveParametersPass final : public SpirVTransformPass {
 public:
-  RemoveParametersPass(pvector<std::pair<uint32_t, uint32_t> > params) :
+  RemoveParametersPass(pvector<std::pair<Id, uint32_t> > params) :
     _params(std::move(params)) {}
 
   virtual void run(SpirVModule &module) override {
-    pmap<uint32_t, pset<uint32_t> > grouped;
+    pmap<Id, pset<uint32_t> > grouped;
     for (const auto &pair : _params) {
       grouped[pair.first].insert(pair.second);
     }
@@ -66,7 +66,7 @@ public:
   }
 
 private:
-  const pvector<std::pair<uint32_t, uint32_t> > _params;
+  const pvector<std::pair<Id, uint32_t> > _params;
 };
 
 /**
@@ -77,9 +77,9 @@ private:
  */
 class RetypeImagePass final : public SpirVTransformPass {
 public:
-  RetypeImagePass(uint32_t before) : _before(before) {}
+  RetypeImagePass(Id before) : _before(before) {}
 
-  uint32_t _new_id = 0;
+  Id _new_id;
 
   virtual void run(SpirVModule &module) override {
     const SpirVModule::Instruction *decl = module.get_global(_before);
@@ -93,7 +93,7 @@ public:
   }
 
 private:
-  const uint32_t _before;
+  const Id _before;
 };
 
 /**
@@ -101,7 +101,7 @@ private:
  */
 class DeleteMemberPass final : public SpirVTransformPass {
 public:
-  DeleteMemberPass(uint32_t type_id, uint32_t member_index) :
+  DeleteMemberPass(Id type_id, uint32_t member_index) :
     _type_id(type_id), _member_index(member_index) {}
 
   virtual void run(SpirVModule &module) override {
@@ -109,7 +109,7 @@ public:
   }
 
 private:
-  const uint32_t _type_id;
+  const Id _type_id;
   const uint32_t _member_index;
 };
 
@@ -118,10 +118,10 @@ private:
  */
 class DefineConstantPass final : public SpirVTransformPass {
 public:
-  DefineConstantPass(int32_t value, uint32_t delete_id = 0) :
+  DefineConstantPass(int32_t value, Id delete_id = Id()) :
     _value(value), _delete_id(delete_id) {}
 
-  uint32_t _const_id = 0;
+  Id _const_id;
 
   virtual void run(SpirVModule &module) override {
     if (_delete_id != 0) {
@@ -132,7 +132,7 @@ public:
 
 private:
   const int32_t _value;
-  const uint32_t _delete_id;
+  const Id _delete_id;
 };
 
 /**
@@ -141,14 +141,14 @@ private:
  * removal.
  */
 struct TestFunction {
-  uint32_t type_id;
-  uint32_t func_id;
-  pvector<uint32_t> param_ids;
+  Id type_id;
+  Id func_id;
+  pvector<Id> param_ids;
 };
 
 TestFunction
-make_float_function(SpirVModule &module, const pvector<uint32_t> &param_type_ids) {
-  uint32_t float_tid = module.define_type(ShaderType::FLOAT);
+make_float_function(SpirVModule &module, const pvector<Id> &param_type_ids) {
+  Id float_tid = module.define_type(ShaderType::FLOAT);
 
   TestFunction fn;
   fn.type_id = module.allocate_id();
@@ -163,8 +163,8 @@ make_float_function(SpirVModule &module, const pvector<uint32_t> &param_type_ids
 
   SpirVBuilder builder(module, fn.func_id, 0);
   builder.insert(spv::OpFunction, {float_tid, fn.func_id, spv::FunctionControlMaskNone, fn.type_id});
-  for (uint32_t param_type_id : param_type_ids) {
-    uint32_t param_id = module.allocate_id();
+  for (Id param_type_id : param_type_ids) {
+    Id param_id = module.allocate_id();
     builder.insert(spv::OpFunctionParameter, {param_type_id, param_id});
     fn.param_ids.push_back(param_id);
   }
@@ -182,9 +182,9 @@ TEST_CASE("SpirVModule prunes deleted variables from entry point interfaces", "[
   // must all disappear.
   SpirVModule module = make_module();
 
-  uint32_t id_in1 = module.define_variable(ShaderType::FLOAT, spv::StorageClassInput);
-  uint32_t id_in2 = module.define_variable(ShaderType::FLOAT, spv::StorageClassInput);
-  uint32_t id_in3 = module.define_variable(ShaderType::FLOAT, spv::StorageClassInput);
+  Id id_in1 = module.define_variable(ShaderType::FLOAT, spv::StorageClassInput);
+  Id id_in2 = module.define_variable(ShaderType::FLOAT, spv::StorageClassInput);
+  Id id_in3 = module.define_variable(ShaderType::FLOAT, spv::StorageClassInput);
   module.set_name(id_in1, "in1");
   module.set_name(id_in2, "in2");
   module.set_name(id_in3, "in3");
@@ -227,16 +227,16 @@ TEST_CASE("SpirVModule strips call arguments when removing function parameters",
 
   const ShaderType *sampler_type = ShaderType::register_type(
     ShaderType::SampledImage(Texture::TT_2d_texture, ShaderType::ST_float, false));
-  uint32_t float_tid = module.define_type(ShaderType::FLOAT);
-  uint32_t ptr_tid = module.define_pointer_type(sampler_type, spv::StorageClassUniformConstant);
-  uint32_t id_tex = module.define_variable(sampler_type, spv::StorageClassUniformConstant);
-  uint32_t id_c1 = module.define_float_constant(1.0f);
+  Id float_tid = module.define_type(ShaderType::FLOAT);
+  Id ptr_tid = module.define_pointer_type(sampler_type, spv::StorageClassUniformConstant);
+  Id id_tex = module.define_variable(sampler_type, spv::StorageClassUniformConstant);
+  Id id_c1 = module.define_float_constant(1.0f);
 
   TestFunction fn_f = make_float_function(module, {ptr_tid, float_tid});
   TestFunction fn_g = make_float_function(module, {float_tid});
 
-  uint32_t id_main = add_main(module, spv::ExecutionModelFragment);
-  uint32_t id_call1, id_call2;
+  Id id_main = add_main(module, spv::ExecutionModelFragment);
+  Id id_call1, id_call2;
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     id_call1 = module.allocate_id();
@@ -279,12 +279,12 @@ TEST_CASE("SpirVModule strips call arguments when removing function parameters",
   CHECK(found_call2);
 
   // The parameter list of f reflects the removal; g is untouched.
-  pvector<uint32_t> f_params =
+  pvector<Id> f_params =
     transformer.get_module().get_function_parameters(fn_f.func_id);
   REQUIRE(f_params.size() == 1);
   CHECK(f_params[0] == fn_f.param_ids[1]);
 
-  pvector<uint32_t> g_params =
+  pvector<Id> g_params =
     transformer.get_module().get_function_parameters(fn_g.func_id);
   REQUIRE(g_params.size() == 1);
   CHECK(g_params[0] == fn_g.param_ids[0]);
@@ -304,10 +304,10 @@ TEST_CASE("SpirVModule merges duplicates cascading from a type replacement", "[s
   const ShaderType *plain_type = ShaderType::register_type(
     ShaderType::SampledImage(Texture::TT_2d_texture, ShaderType::ST_float, false));
 
-  uint32_t id_tex_shadow = module.define_variable(shadow_type, spv::StorageClassUniformConstant);
-  uint32_t id_tex_plain = module.define_variable(plain_type, spv::StorageClassUniformConstant);
+  Id id_tex_shadow = module.define_variable(shadow_type, spv::StorageClassUniformConstant);
+  Id id_tex_plain = module.define_variable(plain_type, spv::StorageClassUniformConstant);
 
-  uint32_t id_main = add_main(module, spv::ExecutionModelFragment);
+  Id id_main = add_main(module, spv::ExecutionModelFragment);
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     builder.op_load(id_tex_shadow);
@@ -316,7 +316,7 @@ TEST_CASE("SpirVModule merges duplicates cascading from a type replacement", "[s
 
   // Find the shadow image type declaration (the image operand of the shadow
   // sampled image type).
-  uint32_t shadow_image_tid = module.get_type_id(module.find_type(shadow_type));
+  Id shadow_image_tid = module.get_type_id(module.find_type(shadow_type));
 
   InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
@@ -351,8 +351,8 @@ TEST_CASE("SpirVModule renumbers member decorations when deleting a member", "[s
   block.add_member(ShaderType::FLOAT, "c");
   const ShaderType *block_type = ShaderType::register_type(std::move(block));
 
-  uint32_t id_block = module.define_variable(block_type, spv::StorageClassUniform);
-  uint32_t block_tid = module.find_type(block_type);
+  Id id_block = module.define_variable(block_type, spv::StorageClassUniform);
+  Id block_tid = module.find_type(block_type);
   REQUIRE(block_tid != 0);
   module.decorate(block_tid, spv::DecorationBlock);
   module.decorate(id_block, spv::DecorationBinding, 0u);
@@ -399,12 +399,12 @@ TEST_CASE("SpirVModule renumbers member decorations when deleting a member", "[s
 TEST_CASE("SpirVModule reuses live constants but not deleted ones", "[shaderpipeline]") {
   SpirVModule module = make_module();
 
-  uint32_t id_c7 = module.define_int_constant(7);
-  uint32_t id_main = add_main(module, spv::ExecutionModelFragment);
+  Id id_c7 = module.define_int_constant(7);
+  Id id_main = add_main(module, spv::ExecutionModelFragment);
 
   // Reference the constant so that it is not dead weight (not required, but
   // more realistic).
-  uint32_t id_var = module.define_variable(ShaderType::INT, spv::StorageClassPrivate);
+  Id id_var = module.define_variable(ShaderType::INT, spv::StorageClassPrivate);
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     builder.op_store(id_var, id_c7);
@@ -429,7 +429,7 @@ TEST_CASE("SpirVModule reuses live constants but not deleted ones", "[shaderpipe
     // Build a variant module in which the constant is unused, so that the
     // pass may delete it before requesting a constant with the same value.
     SpirVModule module2 = make_module();
-    uint32_t id_unused = module2.define_int_constant(7);
+    Id id_unused = module2.define_int_constant(7);
     add_main(module2, spv::ExecutionModelFragment);
 
     InstructionStream stream2 = module2.emit();
@@ -454,13 +454,13 @@ TEST_CASE("SpirVModule round-trips a module through parse and emit", "[shaderpip
   SpirVModule module = make_module();
 
   const ShaderType *vec4_type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
-  uint32_t id_in = module.define_variable(vec4_type, spv::StorageClassInput);
-  uint32_t id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
+  Id id_in = module.define_variable(vec4_type, spv::StorageClassInput);
+  Id id_out = module.define_variable(vec4_type, spv::StorageClassOutput);
   module.set_name(id_in, "color_in");
   module.set_name(id_out, "color_out");
   module.decorate(id_in, spv::DecorationLocation, 3u);
   module.decorate(id_out, spv::DecorationLocation, 0u);
-  uint32_t id_main = add_main(module, spv::ExecutionModelFragment, {id_in, id_out});
+  Id id_main = add_main(module, spv::ExecutionModelFragment, {id_in, id_out});
   {
     SpirVBuilder builder = builder_before_return(module, id_main);
     builder.op_store(id_out, builder.op_load(id_in));
@@ -486,16 +486,63 @@ TEST_CASE("SpirVModule round-trips a module through parse and emit", "[shaderpip
   CHECK(reparsed.get_storage_class(id_in) == spv::StorageClassInput);
 }
 
+TEST_CASE("SpirVModule classifies OpSpecConstantOp as a spec constant", "[shaderpipeline]") {
+  // An array sized by a spec constant expression (2 * spec constant), which
+  // is the shape glslang emits for spec-constant-sized arrays.  Parsing and
+  // resolving such a module must not trip any assertion: the expression is a
+  // SPEC_CONSTANT whose value resolve_constant reports as 0.
+  SpirVModule module = make_module();
+
+  Id id_spec = module.define_spec_constant(ShaderType::INT, 4);
+  module.decorate(id_spec, spv::DecorationSpecId, 12u);
+
+  Id int_tid = module.define_type(ShaderType::INT);
+  Id id_c2 = module.define_int_constant(2);
+  Id id_size = module.allocate_id();
+  module.add_global(SpirVModule::Instruction(spv::OpSpecConstantOp,
+    {int_tid, id_size, (uint32_t)spv::OpIMul, id_spec, id_c2}));
+
+  const ShaderType *float_type = ShaderType::FLOAT;
+  Id float_tid = module.define_type(float_type);
+  Id array_tid = module.allocate_id();
+  module.add_global(SpirVModule::Instruction(spv::OpTypeArray,
+    {array_tid, float_tid, id_size}));
+
+  Id ptr_tid = module.define_pointer_type(array_tid, spv::StorageClassPrivate);
+  Id var_id = module.allocate_id();
+  module.add_global(SpirVModule::Instruction(spv::OpVariable,
+    {ptr_tid, var_id, (uint32_t)spv::StorageClassPrivate}));
+
+  add_main(module, spv::ExecutionModelFragment);
+
+  InstructionStream stream = module.emit();
+  REQUIRE(stream.validate());
+
+  SpirVModule reparsed(stream);
+  CHECK(reparsed.get_kind(id_size) == SpirVModule::IdKind::SPEC_CONSTANT);
+  CHECK(reparsed.resolve_constant(id_size) == 0);
+
+  // The array resolves (with unknowable size 0) rather than raising.
+  const ShaderType *type = reparsed.resolve_type(array_tid);
+  REQUIRE(type != nullptr);
+  CHECK(type->as_array() != nullptr);
+
+  // A fresh emit is still valid and the index is consistent.
+  SpirVTransformer transformer(stream);
+  CHECK(transformer.validate());
+  CHECK(transformer.get_result().validate());
+}
+
 TEST_CASE("SpirVBuilder branch_endif terminates a fall-through block", "[shaderpipeline]") {
   // main() { if (true) { b = a; } }
   SpirVModule module = make_module();
-  uint32_t var_a = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
-  uint32_t var_b = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
-  uint32_t main_id = add_main(module);
-  uint32_t merge;
+  Id var_a = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
+  Id var_b = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
+  Id main_id = add_main(module);
+  Id merge;
   {
     SpirVBuilder builder = builder_before_return(module, main_id);
-    uint32_t cond = module.define_constant(ShaderType::BOOL, 1);
+    Id cond = module.define_constant(ShaderType::BOOL, 1);
     merge = builder.branch_if(cond);
     builder.op_store(var_b, builder.op_load(var_a));
     builder.branch_endif(merge);
@@ -509,4 +556,33 @@ TEST_CASE("SpirVBuilder branch_endif terminates a fall-through block", "[shaderp
   REQUIRE(count_op(stream, spv::OpBranch) == 1);
   Instruction branch = find_op(stream, spv::OpBranch);
   CHECK(branch.args[0] == merge);
+}
+
+TEST_CASE("SpirVBuilder positions at the start of a function body", "[shaderpipeline]") {
+  // A function whose entry block declares a local variable; code inserted at
+  // the body start must land after the OpVariable, not before it.
+  SpirVModule module = make_module();
+  Id var_in = module.define_variable(ShaderType::FLOAT, spv::StorageClassPrivate);
+  Id main_id = add_main(module);
+  {
+    // Add a function-local variable right after the entry label.
+    SpirVModule::Function *function = module.get_function(main_id);
+    REQUIRE(function != nullptr);
+    size_t label_index = 0;
+    while (function->instructions[label_index].opcode != spv::OpLabel) {
+      ++label_index;
+    }
+    SpirVBuilder builder(module, main_id, label_index + 1);
+    Id local_ptr_tid = module.define_pointer_type(ShaderType::FLOAT, spv::StorageClassFunction);
+    Id local_id = module.allocate_id();
+    builder.insert(spv::OpVariable, {local_ptr_tid, local_id, (uint32_t)spv::StorageClassFunction});
+
+    // Now insert a store "at the body start"; it must go after the variable.
+    SpirVBuilder body_builder(module);
+    body_builder.set_insertion_point_to_body_start(main_id);
+    body_builder.op_store(local_id, body_builder.op_load(var_in));
+  }
+
+  InstructionStream stream = module.emit();
+  CHECK(stream.validate());
 }

@@ -30,24 +30,24 @@ TEST_CASE("SpirVModule tracks type canonicality", "[shaderpipeline]") {
 
   // The 16-bit float is declared *before* the 32-bit one, to check that
   // canonicality does not depend on the declaration order for scalars.
-  uint32_t id_half = module.allocate_id();
+  Id id_half = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeFloat, {id_half, 16}));
-  uint32_t id_float = module.define_type(ShaderType::FLOAT);
-  uint32_t id_int = module.define_type(ShaderType::INT);
-  uint32_t id_long = module.allocate_id();
+  Id id_float = module.define_type(ShaderType::FLOAT);
+  Id id_int = module.define_type(ShaderType::INT);
+  Id id_long = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeInt, {id_long, 64, 1}));
 
   const ShaderType *v4float_type =
     ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
-  uint32_t id_v4float = module.define_type(v4float_type);
-  uint32_t id_v4half = module.allocate_id();
+  Id id_v4float = module.define_type(v4float_type);
+  Id id_v4half = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeVector, {id_v4half, id_half, 4}));
 
   const ShaderType *array_float_type =
     ShaderType::register_type(ShaderType::Array(ShaderType::FLOAT, 2));
-  uint32_t id_array_float = module.define_type(array_float_type);
-  uint32_t id_const_2 = module.define_int_constant(2);
-  uint32_t id_array_half = module.allocate_id();
+  Id id_array_float = module.define_type(array_float_type);
+  Id id_const_2 = module.define_int_constant(2);
+  Id id_array_half = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeArray, {id_array_half, id_half, id_const_2}));
 
   // A shadow sampler: the image declaration differs from the canonical
@@ -56,25 +56,25 @@ TEST_CASE("SpirVModule tracks type canonicality", "[shaderpipeline]") {
   // shadow flag is represented on ShaderType::SampledImage.
   const ShaderType *si_shadow_type = ShaderType::register_type(
     ShaderType::SampledImage(Texture::TT_cube_map, ShaderType::ST_float, true));
-  uint32_t id_si_shadow = module.define_type(si_shadow_type);
-  uint32_t id_image_shadow = module.get_type_id(id_si_shadow);
+  Id id_si_shadow = module.define_type(si_shadow_type);
+  Id id_image_shadow = module.get_type_id(id_si_shadow);
 
   // Multisampledness is not represented on ShaderType at all, so neither the
   // image nor the sampled image over it may be considered canonical.
-  uint32_t id_image_ms = module.allocate_id();
+  Id id_image_ms = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeImage,
     {id_image_ms, id_float, (uint32_t)spv::Dim2D, 0, 0, 1, 1,
      (uint32_t)spv::ImageFormatUnknown}));
-  uint32_t id_si_ms = module.allocate_id();
+  Id id_si_ms = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeSampledImage, {id_si_ms, id_image_ms}));
 
   // This is exactly how define_type() declares an image type...
   const ShaderType *image_2d_type = ShaderType::register_type(ShaderType::Image(
     Texture::TT_2d_texture, ShaderType::ST_float, ShaderType::Access::NONE));
-  uint32_t id_image_storage = module.define_type(image_2d_type);
+  Id id_image_storage = module.define_type(image_2d_type);
   // ...and this differs only in the format operand, which ShaderType does not
   // represent.  Note that all three 2D images map to the same ShaderType.
-  uint32_t id_image_rgba8 =
+  Id id_image_rgba8 =
     module.define_image_type(image_2d_type, 2, 2, spv::ImageFormatRgba8);
 
   // Emit the module and parse it back, so that we are checking the state as
