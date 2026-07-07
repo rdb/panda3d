@@ -14,6 +14,8 @@
 #include "spirVBuilder.h"
 #include "pbitops.h"
 
+#include "GLSL.std.450.h"
+
 #ifndef NDEBUG
 /**
  * Returns the scalar type of a scalar, vector or matrix ShaderType, or
@@ -279,6 +281,21 @@ op_vector_shuffle(SpirVId vec1, SpirVId vec2, const pvector<uint32_t> &component
   op.args.insert(op.args.end(), components.begin(), components.end());
   insert(std::move(op));
   return id;
+}
+
+/**
+ * Convenience swizzle of a single vector: extracts the given components, in
+ * the given order, into a new vector (or a scalar, if only one component is
+ * given).
+ */
+SpirVId SpirVBuilder::
+op_swizzle(SpirVId vec, std::initializer_list<uint32_t> components) {
+  nassertr(components.size() > 0, SpirVId());
+  if (components.size() == 1) {
+    return op_composite_extract(vec, {*components.begin()});
+  }
+  return op_vector_shuffle(vec, vec,
+    pvector<uint32_t>(components.begin(), components.end()));
 }
 
 /**
@@ -661,9 +678,15 @@ op_multiply(SpirVId left, SpirVId right) {
       opcode = spv::OpVectorTimesScalar;
       type_id = _module.get_type_id(left);
     }
-    else if (right_type->as_vector() != nullptr) {
-      nassert_raise("op_multiply for vector times vector is ambiguous");
-      return SpirVId();
+    else if (const ShaderType::Vector *rvector = right_type->as_vector()) {
+      // Component-wise multiplication, with GLSL/Cg semantics.  For a dot
+      // product, use op_dot instead.
+      nassertr(left_type == right_type, SpirVId());
+      // Floating-point only, for now.
+      nassertr(is_float_scalar_type(lvector->get_scalar_type()), SpirVId());
+      (void)rvector;
+      opcode = spv::OpFMul;
+      type_id = _module.get_type_id(left);
     }
     else if (const ShaderType::Matrix *rmatrix = right_type->as_matrix()) {
       nassertr(lvector->get_scalar_type() == rmatrix->get_scalar_type(), SpirVId());
@@ -741,6 +764,103 @@ op_image_sample(SpirVId image, SpirVId coord, uint32_t operands, const uint32_t 
     op.args.insert(op.args.end(), ids, ids + num_ids);
   }
   insert(std::move(op));
+  return id;
+}
+
+/**
+ * Inserts an OpImageSampleProjImplicitLod, which divides the coordinate by
+ * its last component before sampling.
+ */
+SpirVId SpirVBuilder::
+op_image_sample_proj(SpirVId image, SpirVId coord) {
+  const ShaderType *image_type = _module.resolve_value_type(image);
+  nassertr(image_type != nullptr, SpirVId());
+  const ShaderType::SampledImage *sampled_image = image_type->as_sampled_image();
+  nassertr(sampled_image != nullptr, SpirVId());
+
+  const ShaderType *type = ShaderType::register_type(ShaderType::Vector(sampled_image->get_sampled_type(), 4));
+  SpirVId type_id = _module.define_type(type);
+
+  SpirVId id = allocate_id();
+  insert(spv::OpImageSampleProjImplicitLod, {type_id, id, image, coord});
+  return id;
+}
+
+/**
+ * Inserts an OpImageSampleDrefImplicitLod, which performs a depth comparison
+ * against the given reference value.  The result is a scalar.
+ */
+SpirVId SpirVBuilder::
+op_image_sample_dref(SpirVId image, SpirVId coord, SpirVId dref) {
+  const ShaderType *image_type = _module.resolve_value_type(image);
+  nassertr(image_type != nullptr, SpirVId());
+  const ShaderType::SampledImage *sampled_image = image_type->as_sampled_image();
+  nassertr(sampled_image != nullptr, SpirVId());
+
+  const ShaderType *type = ShaderType::register_type(ShaderType::Scalar(sampled_image->get_sampled_type()));
+  SpirVId type_id = _module.define_type(type);
+
+  SpirVId id = allocate_id();
+  insert(spv::OpImageSampleDrefImplicitLod, {type_id, id, image, coord, dref});
+  return id;
+}
+
+/**
+ * Inserts an OpImageSampleProjDrefImplicitLod: like op_image_sample_dref,
+ * but the coordinate and reference value are divided by the coordinate's
+ * last component first.
+ */
+SpirVId SpirVBuilder::
+op_image_sample_proj_dref(SpirVId image, SpirVId coord, SpirVId dref) {
+  const ShaderType *image_type = _module.resolve_value_type(image);
+  nassertr(image_type != nullptr, SpirVId());
+  const ShaderType::SampledImage *sampled_image = image_type->as_sampled_image();
+  nassertr(sampled_image != nullptr, SpirVId());
+
+  const ShaderType *type = ShaderType::register_type(ShaderType::Scalar(sampled_image->get_sampled_type()));
+  SpirVId type_id = _module.define_type(type);
+
+  SpirVId id = allocate_id();
+  insert(spv::OpImageSampleProjDrefImplicitLod, {type_id, id, image, coord, dref});
+  return id;
+}
+
+/**
+ * Inserts an OpImageFetch, which reads a single texel using an (integer)
+ * coordinate, without filtering.  The given image may be a sampled image, in
+ * which case the image is first extracted from it.
+ */
+SpirVId SpirVBuilder::
+op_image_fetch(SpirVId image, SpirVId coord) {
+  const ShaderType *image_type = _module.resolve_value_type(image);
+  nassertr(image_type != nullptr, SpirVId());
+
+  ShaderType::ScalarType sampled_type;
+  if (const ShaderType::SampledImage *sampled_image = image_type->as_sampled_image()) {
+    // Extract the image from the sampled image.
+    const Instruction *decl = _module.get_decl(_module.get_type_id(image));
+    nassertr(decl != nullptr && decl->opcode == spv::OpTypeSampledImage, SpirVId());
+    SpirVId image_type_id(decl->args[1]);
+
+    SpirVId image_id = allocate_id();
+    insert(spv::OpImage, {image_type_id, image_id, image});
+    image = image_id;
+
+    sampled_type = sampled_image->get_sampled_type();
+  }
+  else if (const ShaderType::Image *plain_image = image_type->as_image()) {
+    sampled_type = plain_image->get_sampled_type();
+  }
+  else {
+    nassert_raise("op_image_fetch requires an image or sampled image");
+    return SpirVId();
+  }
+
+  const ShaderType *type = ShaderType::register_type(ShaderType::Vector(sampled_type, 4));
+  SpirVId type_id = _module.define_type(type);
+
+  SpirVId id = allocate_id();
+  insert(spv::OpImageFetch, {type_id, id, image, coord});
   return id;
 }
 
@@ -868,4 +988,141 @@ branch_endif(SpirVId false_label) {
   }
 
   insert(spv::OpLabel, {false_label});
+}
+
+/**
+ * Inserts an OpExtInst invoking the given instruction of the given extended
+ * instruction set, which is imported into the module if necessary.
+ */
+SpirVId SpirVBuilder::
+op_ext_inst(SpirVId result_type_id, const char *set, uint32_t instruction,
+            std::initializer_list<SpirVId> operands) {
+  SpirVId set_id = _module.add_ext_inst_import(set);
+  SpirVId id = allocate_id();
+
+  Instruction op(spv::OpExtInst, {result_type_id, id, set_id, instruction});
+  op.args.insert(op.args.end(), operands.begin(), operands.end());
+  insert(std::move(op));
+  return id;
+}
+
+/**
+ * Inserts a GLSL.std.450 extended instruction whose result type equals the
+ * type of its first operand.
+ */
+SpirVId SpirVBuilder::
+op_glsl_std_450(uint32_t instruction, std::initializer_list<SpirVId> operands) {
+  nassertr(operands.size() > 0, SpirVId());
+#ifndef NDEBUG
+  const ShaderType *type = _module.resolve_value_type(*operands.begin());
+  nassertr(is_float_scalar_type(get_element_scalar_type(type)), SpirVId());
+  for (SpirVId operand : operands) {
+    nassertr(_module.resolve_value_type(operand) == type, SpirVId());
+  }
+#endif
+  return op_ext_inst(_module.get_type_id(*operands.begin()), "GLSL.std.450",
+                     instruction, operands);
+}
+
+/**
+ * Inserts a floating-point absolute value instruction.
+ */
+SpirVId SpirVBuilder::
+op_abs(SpirVId value) {
+  return op_glsl_std_450(GLSLstd450FAbs, {value});
+}
+
+/**
+ * Inserts a base-2 exponential instruction.
+ */
+SpirVId SpirVBuilder::
+op_exp2(SpirVId value) {
+  return op_glsl_std_450(GLSLstd450Exp2, {value});
+}
+
+/**
+ * Inserts a power instruction.
+ */
+SpirVId SpirVBuilder::
+op_pow(SpirVId base, SpirVId exponent) {
+  return op_glsl_std_450(GLSLstd450Pow, {base, exponent});
+}
+
+/**
+ * Inserts a floating-point minimum instruction.
+ */
+SpirVId SpirVBuilder::
+op_min(SpirVId a, SpirVId b) {
+  return op_glsl_std_450(GLSLstd450FMin, {a, b});
+}
+
+/**
+ * Inserts a floating-point maximum instruction.
+ */
+SpirVId SpirVBuilder::
+op_max(SpirVId a, SpirVId b) {
+  return op_glsl_std_450(GLSLstd450FMax, {a, b});
+}
+
+/**
+ * Inserts a floating-point clamp instruction.
+ */
+SpirVId SpirVBuilder::
+op_clamp(SpirVId value, SpirVId min_value, SpirVId max_value) {
+  return op_glsl_std_450(GLSLstd450FClamp, {value, min_value, max_value});
+}
+
+/**
+ * Clamps the given float scalar or vector to the [0, 1] range.
+ */
+SpirVId SpirVBuilder::
+op_saturate(SpirVId value) {
+  const ShaderType *type = _module.resolve_value_type(value);
+  nassertr(type != nullptr, SpirVId());
+
+  SpirVId zero, one;
+  if (const ShaderType::Vector *vector = type->as_vector()) {
+    uint32_t n = vector->get_num_components();
+    zero = _module.define_composite_constant(type,
+      pvector<SpirVId>(n, define_float_constant(0.0f)));
+    one = _module.define_composite_constant(type,
+      pvector<SpirVId>(n, define_float_constant(1.0f)));
+  } else {
+    zero = define_float_constant(0.0f);
+    one = define_float_constant(1.0f);
+  }
+  return op_clamp(value, zero, one);
+}
+
+/**
+ * Inserts a linear interpolation instruction.  All three operands must have
+ * the same type.
+ */
+SpirVId SpirVBuilder::
+op_mix(SpirVId a, SpirVId b, SpirVId t) {
+  return op_glsl_std_450(GLSLstd450FMix, {a, b, t});
+}
+
+/**
+ * Inserts an instruction taking the length of the given vector, producing a
+ * scalar.
+ */
+SpirVId SpirVBuilder::
+op_length(SpirVId vector) {
+  const ShaderType *type = _module.resolve_value_type(vector);
+  nassertr(type != nullptr, SpirVId());
+  const ShaderType::Vector *vector_type = type->as_vector();
+  nassertr(vector_type != nullptr, SpirVId());
+
+  const ShaderType *scalar_type = ShaderType::register_type(ShaderType::Scalar(vector_type->get_scalar_type()));
+  return op_ext_inst(_module.define_type(scalar_type), "GLSL.std.450",
+                     GLSLstd450Length, {vector});
+}
+
+/**
+ * Inserts a vector normalization instruction.
+ */
+SpirVId SpirVBuilder::
+op_normalize(SpirVId vector) {
+  return op_glsl_std_450(GLSLstd450Normalize, {vector});
 }

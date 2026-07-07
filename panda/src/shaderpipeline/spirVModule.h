@@ -364,6 +364,9 @@ public:
   // if it does not exist.
   SpirVId ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin);
 
+  // As above, but for an output variable.
+  SpirVId ensure_builtin_output(spv::ExecutionModel model, spv::BuiltIn builtin);
+
   // Definition helpers; these append any needed declarations to the globals
   // section (reusing existing declarations where permitted) and record them
   // in the id index.
@@ -377,6 +380,7 @@ public:
   INLINE SpirVId define_float_constant(float constant);
   SpirVId define_null_constant(const ShaderType *type);
   SpirVId define_constant(const ShaderType *type, uint32_t constant);
+  SpirVId define_composite_constant(const ShaderType *type, const pvector<SpirVId> &constituents);
   SpirVId define_spec_constant(const ShaderType *type, uint32_t def_value);
 
   // Adds the given instruction to the globals section, recording its result
@@ -401,6 +405,13 @@ private:
   INLINE IdEntry &modify_entry(SpirVId id);
   void record_result_at(const Instruction &op, SpirVId function_id, int32_t global_index);
   void clear_id_state(SpirVId id);
+
+  SpirVId ensure_builtin(spv::ExecutionModel model, spv::StorageClass storage_class,
+                         spv::BuiltIn builtin);
+
+  SpirVId find_constant(spv::Op opcode, SpirVId type_id,
+                        const uint32_t *operands, size_t num_operands) const;
+  void ensure_constant_map() const;
 
   // For clear_id_state, when a replacement renumbers an inserted result.
   friend class SpirVInstructionCursor;
@@ -460,6 +471,15 @@ private:
   typedef pmap<const ShaderType *, SpirVId> TypeMap;
   mutable TypeMap _type_map;
   mutable bool _type_map_valid = false;
+
+  // Reverse mapping for reusing existing constant declarations, keyed by
+  // the declaring opcode, type id, and literal/constituent operand words.
+  // This is only a lookup structure: it is built lazily, kept up to date by
+  // add_global, and every hit is verified against the current declaration,
+  // so entries that a mutation has made stale simply read as misses.
+  typedef pmap<pvector<uint32_t>, SpirVId> ConstantMap;
+  mutable ConstantMap _constant_map;
+  mutable bool _constant_map_valid = false;
 };
 
 #include "spirVModule.I"

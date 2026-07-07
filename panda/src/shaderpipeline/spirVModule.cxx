@@ -2575,11 +2575,100 @@ reassign_global_id(SpirVId old_id, SpirVId new_id) {
  * Adds the given instruction to the globals section, recording its result
  * (if any) in the id index.
  */
+/**
+ * If the given instruction declares a constant that the reuse map indexes,
+ * fills in its lookup key and returns true.
+ */
+static bool
+make_constant_key(const SpirVModule::Instruction &op, pvector<uint32_t> &key) {
+  switch (op.opcode) {
+  case spv::OpConstant:
+  case spv::OpConstantTrue:
+  case spv::OpConstantFalse:
+  case spv::OpConstantNull:
+  case spv::OpConstantComposite:
+    break;
+  default:
+    return false;
+  }
+  if (op.args.size() < 2) {
+    return false;
+  }
+  key.clear();
+  key.push_back((uint32_t)op.opcode);
+  key.push_back(op.args[0]);
+  key.insert(key.end(), op.args.begin() + 2, op.args.end());
+  return true;
+}
+
 void SpirVModule::
 add_global(Instruction op) {
   int32_t index = (int32_t)_globals.size();
   _globals.push_back(std::move(op));
   record_result_at(_globals.back(), SpirVId(), index);
+
+  if (_constant_map_valid) {
+    pvector<uint32_t> key;
+    if (make_constant_key(_globals.back(), key)) {
+      _constant_map.insert({std::move(key), _globals.back().get_result()});
+    }
+  }
+}
+
+/**
+ * Makes sure that the constant reuse map indexes all live constant
+ * declarations in the globals section.
+ */
+void SpirVModule::
+ensure_constant_map() const {
+  if (_constant_map_valid) {
+    return;
+  }
+  _constant_map.clear();
+  pvector<uint32_t> key;
+  for (const Instruction &op : _globals) {
+    if (make_constant_key(op, key)) {
+      // If there are duplicate declarations, the first one becomes the
+      // canonical one, like the linear scans this map replaces would find.
+      _constant_map.insert({key, SpirVId(op.args[1])});
+    }
+  }
+  _constant_map_valid = true;
+}
+
+/**
+ * Returns the id of an existing constant declaration with the given opcode,
+ * type and operand words, or 0 if there is none.
+ */
+SpirVId SpirVModule::
+find_constant(spv::Op opcode, SpirVId type_id,
+              const uint32_t *operands, size_t num_operands) const {
+  ensure_constant_map();
+
+  pvector<uint32_t> key;
+  key.reserve(num_operands + 2);
+  key.push_back((uint32_t)opcode);
+  key.push_back(type_id);
+  key.insert(key.end(), operands, operands + num_operands);
+
+  ConstantMap::const_iterator it = _constant_map.find(key);
+  if (it == _constant_map.end()) {
+    return SpirVId();
+  }
+
+  // Verify the entry against the current declaration, so that an entry made
+  // stale by a mutation (a deleted or reassigned id) reads as a miss.
+  SpirVId id = it->second;
+  const Instruction *decl = get_decl(id);
+  if (decl != nullptr && decl->opcode == opcode &&
+      decl->args.size() == num_operands + 2 &&
+      decl->args[0] == type_id && decl->args[1] == id &&
+      std::equal(operands, operands + num_operands, decl->args.begin() + 2)) {
+    return id;
+  }
+
+  _constant_map.erase(it);
+  return SpirVId();
 }
 
 /**
@@ -2690,18 +2779,74 @@ add_to_interfaces(spv::ExecutionModel model, SpirVId var_id) {
 }
 
 /**
- * Makes sure that a module-scope input variable with the given builtin
- * exists and is part of the interface of all entry points with the given
- * execution model, and returns its id.
+ * Returns the type that a variable with the given builtin decoration is
+ * declared with, or null if the builtin is not known here.
+ */
+static const ShaderType *
+get_builtin_type(spv::BuiltIn builtin) {
+  switch (builtin) {
+  case spv::BuiltInVertexId:
+  case spv::BuiltInInstanceId:
+  case spv::BuiltInPrimitiveId:
+  case spv::BuiltInInvocationId:
+  case spv::BuiltInLayer:
+  case spv::BuiltInViewportIndex:
+  case spv::BuiltInPatchVertices:
+  case spv::BuiltInSampleId:
+  case spv::BuiltInVertexIndex:
+  case spv::BuiltInInstanceIndex:
+    return ShaderType::INT;
+
+  case spv::BuiltInPointSize:
+  case spv::BuiltInFragDepth:
+  case spv::BuiltInTessLevelOuter:
+  case spv::BuiltInTessLevelInner:
+    return ShaderType::FLOAT;
+
+  case spv::BuiltInTessCoord:
+    return ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 3));
+
+  case spv::BuiltInPosition:
+  case spv::BuiltInFragCoord:
+    return ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
+
+  case spv::BuiltInPointCoord:
+  case spv::BuiltInSamplePosition:
+    return ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 2));
+
+  case spv::BuiltInFrontFacing:
+  case spv::BuiltInHelperInvocation:
+    return ShaderType::BOOL;
+
+  case spv::BuiltInNumWorkgroups:
+  case spv::BuiltInWorkgroupSize:
+  case spv::BuiltInWorkgroupId:
+  case spv::BuiltInLocalInvocationId:
+  case spv::BuiltInGlobalInvocationId:
+    return ShaderType::register_type(ShaderType::Vector(ShaderType::ST_uint, 3));
+
+  case spv::BuiltInLocalInvocationIndex:
+    return ShaderType::UINT;
+
+  default:
+    return nullptr;
+  }
+}
+
+/**
+ * Makes sure that a module-scope variable of the given storage class with
+ * the given builtin exists and is part of the interface of all entry points
+ * with the given execution model, and returns its id.
  */
 SpirVId SpirVModule::
-ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin) {
+ensure_builtin(spv::ExecutionModel model, spv::StorageClass storage_class,
+               spv::BuiltIn builtin) {
   SpirVId var_id;
   for (uint32_t word = 0; word < _ids.size(); ++word) {
     SpirVId id(word);
     const IdEntry &entry = _ids[word];
     if (entry._kind == IdKind::VARIABLE && entry._function_id == 0 &&
-        get_storage_class(id) == spv::StorageClassInput &&
+        get_storage_class(id) == storage_class &&
         get_builtin(id) == builtin) {
       var_id = id;
       break;
@@ -2709,68 +2854,39 @@ ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin) {
   }
 
   if (var_id == 0) {
-    const ShaderType *type;
-    switch (builtin) {
-    case spv::BuiltInVertexId:
-    case spv::BuiltInInstanceId:
-    case spv::BuiltInPrimitiveId:
-    case spv::BuiltInInvocationId:
-    case spv::BuiltInLayer:
-    case spv::BuiltInViewportIndex:
-    case spv::BuiltInPatchVertices:
-    case spv::BuiltInSampleId:
-    case spv::BuiltInVertexIndex:
-    case spv::BuiltInInstanceIndex:
-      type = ShaderType::INT;
-      break;
-
-    case spv::BuiltInTessLevelOuter:
-    case spv::BuiltInTessLevelInner:
-      type = ShaderType::FLOAT;
-      break;
-
-    case spv::BuiltInTessCoord:
-      type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 3));
-      break;
-
-    case spv::BuiltInFragCoord:
-      type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4));
-      break;
-
-    case spv::BuiltInPointCoord:
-    case spv::BuiltInSamplePosition:
-      type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 2));
-      break;
-
-    case spv::BuiltInFrontFacing:
-    case spv::BuiltInHelperInvocation:
-      type = ShaderType::BOOL;
-      break;
-
-    case spv::BuiltInNumWorkgroups:
-    case spv::BuiltInWorkgroupSize:
-    case spv::BuiltInWorkgroupId:
-    case spv::BuiltInLocalInvocationId:
-    case spv::BuiltInGlobalInvocationId:
-      type = ShaderType::register_type(ShaderType::Vector(ShaderType::ST_uint, 3));
-      break;
-
-    case spv::BuiltInLocalInvocationIndex:
-      type = ShaderType::UINT;
-      break;
-
-    default:
-      // Unhandled / invalid input
+    const ShaderType *type = get_builtin_type(builtin);
+    if (type == nullptr) {
+      // Unhandled / invalid builtin
       nassertr(false, SpirVId());
       return SpirVId();
     }
 
-    var_id = define_variable(type, spv::StorageClassInput);
+    var_id = define_variable(type, storage_class);
     decorate(var_id, spv::DecorationBuiltIn, builtin);
   }
 
   add_to_interfaces(model, var_id);
   return var_id;
+}
+
+/**
+ * Makes sure that a module-scope input variable with the given builtin
+ * exists and is part of the interface of all entry points with the given
+ * execution model, and returns its id.
+ */
+SpirVId SpirVModule::
+ensure_builtin_input(spv::ExecutionModel model, spv::BuiltIn builtin) {
+  return ensure_builtin(model, spv::StorageClassInput, builtin);
+}
+
+/**
+ * Makes sure that a module-scope output variable with the given builtin
+ * exists and is part of the interface of all entry points with the given
+ * execution model, and returns its id.
+ */
+SpirVId SpirVModule::
+ensure_builtin_output(spv::ExecutionModel model, spv::BuiltIn builtin) {
+  return ensure_builtin(model, spv::StorageClassOutput, builtin);
 }
 
 /**
@@ -3160,26 +3276,30 @@ r_annotate_struct_layout(SpirVId type_id) {
  */
 SpirVId SpirVModule::
 define_int_constant(int32_t constant) {
-  for (const Instruction &op : _globals) {
-    if (op.opcode != spv::OpConstant || op.args.size() != 3 ||
-        op.args[2] != (uint32_t)constant) {
-      continue;
-    }
-    // Skip constants of a non-canonical type declaration (eg. a 16-bit int),
-    // which cannot be reused interchangeably with a plain int constant.
-    const Instruction *type_decl = get_decl(SpirVId(op.args[0]));
-    if (type_decl != nullptr && type_decl->opcode == spv::OpTypeInt &&
-        type_decl->args.size() == 3 && type_decl->args[1] == 32) {
-      if (type_decl->args[2] != 0 || constant >= 0) {
-        return SpirVId(op.args[1]);
+  uint32_t word = (uint32_t)constant;
+
+  // A constant of the canonical uint type is interchangeable with a plain
+  // int constant when the value is non-negative.  Constants of non-canonical
+  // type declarations (eg. a 16-bit int) are not; find_type only returns
+  // canonical declarations, so those are never matched here.
+  if (constant >= 0) {
+    SpirVId uint_type_id = find_type(ShaderType::UINT);
+    if (uint_type_id != 0) {
+      SpirVId constant_id = find_constant(spv::OpConstant, uint_type_id, &word, 1);
+      if (constant_id != 0) {
+        return constant_id;
       }
     }
   }
 
   SpirVId type_id = define_type(ShaderType::INT);
-  SpirVId constant_id = allocate_id();
+  SpirVId constant_id = find_constant(spv::OpConstant, type_id, &word, 1);
+  if (constant_id != 0) {
+    return constant_id;
+  }
 
-  add_global(Instruction(spv::OpConstant, {type_id, constant_id, (uint32_t)constant}));
+  constant_id = allocate_id();
+  add_global(Instruction(spv::OpConstant, {type_id, constant_id, word}));
   return constant_id;
 }
 
@@ -3191,32 +3311,69 @@ SpirVId SpirVModule::
 define_null_constant(const ShaderType *type) {
   SpirVId type_id = define_type(type);
 
-  for (const Instruction &op : _globals) {
-    if (op.opcode == spv::OpConstantNull && op.args.size() >= 2 &&
-        op.args[0] == type_id) {
-      return SpirVId(op.args[1]);
-    }
+  SpirVId constant_id = find_constant(spv::OpConstantNull, type_id, nullptr, 0);
+  if (constant_id != 0) {
+    return constant_id;
   }
 
-  SpirVId constant_id = allocate_id();
+  constant_id = allocate_id();
   add_global(Instruction(spv::OpConstantNull, {type_id, constant_id}));
   return constant_id;
 }
 
 /**
- * Defines a new constant.  Does not attempt to reuse constants.
+ * Defines a new constant, reusing an existing one if one is already defined
+ * with this exact type.
  */
 SpirVId SpirVModule::
 define_constant(const ShaderType *type, uint32_t constant) {
   SpirVId type_id = define_type(type);
 
-  SpirVId constant_id = allocate_id();
   if (type == ShaderType::BOOL) {
-    add_global(Instruction(constant ? spv::OpConstantTrue : spv::OpConstantFalse,
-                           {type_id, constant_id}));
-  } else {
-    add_global(Instruction(spv::OpConstant, {type_id, constant_id, constant}));
+    spv::Op opcode = constant ? spv::OpConstantTrue : spv::OpConstantFalse;
+    SpirVId constant_id = find_constant(opcode, type_id, nullptr, 0);
+    if (constant_id != 0) {
+      return constant_id;
+    }
+    constant_id = allocate_id();
+    add_global(Instruction(opcode, {type_id, constant_id}));
+    return constant_id;
   }
+
+  SpirVId constant_id = find_constant(spv::OpConstant, type_id, &constant, 1);
+  if (constant_id != 0) {
+    return constant_id;
+  }
+
+  constant_id = allocate_id();
+  add_global(Instruction(spv::OpConstant, {type_id, constant_id, constant}));
+  return constant_id;
+}
+
+/**
+ * Defines a new composite constant (such as a vector or matrix constant)
+ * with the given (constant) constituents, reusing an existing one if one is
+ * already defined with this exact type and these exact constituents.
+ */
+SpirVId SpirVModule::
+define_composite_constant(const ShaderType *type, const pvector<SpirVId> &constituents) {
+  SpirVId type_id = define_type(type);
+
+  pvector<uint32_t> words;
+  words.reserve(constituents.size());
+  for (SpirVId constituent : constituents) {
+    words.push_back(constituent);
+  }
+  SpirVId constant_id = find_constant(spv::OpConstantComposite, type_id,
+                                      words.data(), words.size());
+  if (constant_id != 0) {
+    return constant_id;
+  }
+
+  constant_id = allocate_id();
+  Instruction op(spv::OpConstantComposite, {type_id, constant_id});
+  op.args.insert(op.args.end(), words.begin(), words.end());
+  add_global(std::move(op));
   return constant_id;
 }
 

@@ -76,6 +76,7 @@ public:
   SpirVId op_select(SpirVId cond, SpirVId obj1, SpirVId obj2);
   SpirVId op_access_chain(SpirVId var_id, std::initializer_list<SpirVId> chain);
   SpirVId op_vector_shuffle(SpirVId vec1, SpirVId vec2, const pvector<uint32_t> &components);
+  SpirVId op_swizzle(SpirVId vec, std::initializer_list<uint32_t> components);
   SpirVId op_composite_construct(const ShaderType *type, const pvector<SpirVId> &constituents);
   SpirVId op_composite_extract(SpirVId obj_id, std::initializer_list<uint32_t> chain);
   SpirVId op_composite_insert(SpirVId obj_id, SpirVId composite_id, std::initializer_list<uint32_t> chain);
@@ -90,7 +91,30 @@ public:
   SpirVId op_negate(SpirVId value);
   SpirVId op_multiply(SpirVId left, SpirVId right);
   SpirVId op_image_sample(SpirVId image, SpirVId coord, uint32_t operands = 0u, const uint32_t *ids = nullptr);
+  SpirVId op_image_sample_proj(SpirVId image, SpirVId coord);
+  SpirVId op_image_sample_dref(SpirVId image, SpirVId coord, SpirVId dref);
+  SpirVId op_image_sample_proj_dref(SpirVId image, SpirVId coord, SpirVId dref);
+  SpirVId op_image_fetch(SpirVId image, SpirVId coord);
   SpirVId op_function_call(SpirVId func_id);
+
+  // Inserts an instruction from an extended instruction set, importing the
+  // set if necessary.
+  SpirVId op_ext_inst(SpirVId result_type_id, const char *set,
+                      uint32_t instruction, std::initializer_list<SpirVId> operands);
+
+  // Convenience wrappers around common GLSL.std.450 extended instructions.
+  // These operate on float scalars and vectors; the operands of the binary
+  // and ternary ones must all have the same type.
+  SpirVId op_abs(SpirVId value);
+  SpirVId op_exp2(SpirVId value);
+  SpirVId op_pow(SpirVId base, SpirVId exponent);
+  SpirVId op_min(SpirVId a, SpirVId b);
+  SpirVId op_max(SpirVId a, SpirVId b);
+  SpirVId op_clamp(SpirVId value, SpirVId min_value, SpirVId max_value);
+  SpirVId op_saturate(SpirVId value);
+  SpirVId op_mix(SpirVId a, SpirVId b, SpirVId t);
+  SpirVId op_length(SpirVId vector);
+  SpirVId op_normalize(SpirVId vector);
 
   // Starts a new function at the end of the module, positioning the cursor
   // inside it.  Terminate it with op_function_end.
@@ -105,6 +129,8 @@ public:
   void branch_endif(SpirVId label);
 
 private:
+  SpirVId op_glsl_std_450(uint32_t instruction, std::initializer_list<SpirVId> operands);
+
   SpirVModule &_module;
 
   // Cursor: index of the function in the module (or npos when not inside a
