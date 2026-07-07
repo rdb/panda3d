@@ -103,19 +103,131 @@ allocate_id() {
 }
 
 /**
- * Returns the id table.
+ * Returns what kind of thing the given id refers to.
  */
-INLINE const SpirVResultDatabase &SpirVModule::
-get_db() const {
-  return _db;
+INLINE SpirVModule::IdKind SpirVModule::
+get_kind(uint32_t id) const {
+  return get_entry(id)._kind;
 }
 
 /**
- * Returns the id table for modification.
+ * Returns true if the given id is a type (including pointer and function
+ * types).
  */
-INLINE SpirVResultDatabase &SpirVModule::
-modify_db() {
-  return _db;
+INLINE bool SpirVModule::
+is_type(uint32_t id) const {
+  IdKind kind = get_entry(id)._kind;
+  return kind == IdKind::TYPE || kind == IdKind::POINTER_TYPE ||
+         kind == IdKind::FUNCTION_TYPE;
+}
+
+/**
+ * Returns the id of the function the given id is declared in, or 0 if it is
+ * declared at module scope.  For a function, returns the function's own id.
+ */
+INLINE uint32_t SpirVModule::
+get_function_id(uint32_t id) const {
+  return get_entry(id)._function_id;
+}
+
+/**
+ * Returns the index entry for the given id, or a default entry if the id is
+ * out of range.
+ */
+INLINE const SpirVModule::IdEntry &SpirVModule::
+get_entry(uint32_t id) const {
+  if (id >= _ids.size()) {
+    static const IdEntry default_entry;
+    return default_entry;
+  }
+  return _ids[id];
+}
+
+/**
+ * Returns a mutable index entry for the given id, growing the index as
+ * needed.  May invalidate existing entry references.
+ */
+INLINE SpirVModule::IdEntry &SpirVModule::
+modify_entry(uint32_t id) {
+  if (id >= _ids.size()) {
+    _ids.resize(id + 1);
+  }
+  return _ids[id];
+}
+
+/**
+ * Looks up the given string.
+ */
+INLINE std::string SpirVModule::
+resolve_string(uint32_t id) const {
+  if (get_entry(id)._kind != IdKind::STRING) {
+    error_expected(id, "a string");
+    return std::string();
+  }
+  for (const Instruction &op : _debug) {
+    if (op.opcode == spv::OpString && !op.args.empty() && op.args[0] == id) {
+      return op.get_string(1);
+    }
+  }
+  return std::string();
+}
+
+/**
+ * Returns the location decoration of the given id, or -1 if it has none.
+ */
+INLINE int SpirVModule::
+get_location(uint32_t id) const {
+  return has_decoration(id, spv::DecorationLocation)
+    ? (int)get_decoration(id, spv::DecorationLocation)
+    : -1;
+}
+
+/**
+ * Returns the builtin decoration of the given id, or spv::BuiltInMax if it
+ * has none.
+ */
+INLINE spv::BuiltIn SpirVModule::
+get_builtin(uint32_t id) const {
+  return (spv::BuiltIn)get_decoration(id, spv::DecorationBuiltIn,
+                                      (uint32_t)spv::BuiltInMax);
+}
+
+/**
+ * Returns the SpecId decoration of the given id, or 0 if it has none.
+ */
+INLINE uint32_t SpirVModule::
+get_spec_id(uint32_t id) const {
+  return get_decoration(id, spv::DecorationSpecId, 0);
+}
+
+/**
+ * Returns the ArrayStride decoration of the given type id, or 0 if it has
+ * none.
+ */
+INLINE uint32_t SpirVModule::
+get_array_stride(uint32_t type_id) const {
+  return get_decoration(type_id, spv::DecorationArrayStride, 0);
+}
+
+/**
+ * Returns the Offset decoration of the given struct member, or -1 if it has
+ * none.
+ */
+INLINE int SpirVModule::
+get_member_offset(uint32_t type_id, uint32_t member_index) const {
+  return has_member_decoration(type_id, member_index, spv::DecorationOffset)
+    ? (int)get_member_decoration(type_id, member_index, spv::DecorationOffset)
+    : -1;
+}
+
+/**
+ * Returns the builtin decoration of the given struct member, or
+ * spv::BuiltInMax if it has none.
+ */
+INLINE spv::BuiltIn SpirVModule::
+get_member_builtin(uint32_t type_id, uint32_t member_index) const {
+  return (spv::BuiltIn)get_member_decoration(type_id, member_index,
+    spv::DecorationBuiltIn, (uint32_t)spv::BuiltInMax);
 }
 
 /**
@@ -144,84 +256,18 @@ get_annotations(uint32_t id) const {
 }
 
 /**
- * Looks up the given string.
+ * Returns true if the given id is a type and the canonical declaration of
+ * that type, ie. declared the same way define_type(...) would declare it.
  */
-INLINE std::string SpirVModule::
-resolve_string(uint32_t id) const {
-  const Definition &def = _db.get_definition(id);
-  if (!def.is_string()) {
-    error_expected(id, "a string");
-    return std::string();
+INLINE bool SpirVModule::
+is_canonical_type(uint32_t type_id) const {
+  ensure_type_map();
+  const ShaderType *type = get_entry(type_id)._type;
+  if (type == nullptr) {
+    return false;
   }
-  return def._name;
-}
-
-/**
- * Looks up the given constant's (first word) value.
- */
-INLINE uint32_t SpirVModule::
-resolve_constant(uint32_t id) const {
-  const Definition &def = _db.get_definition(id);
-  if (!def.is_constant()) {
-    return error_expected(id, "a constant");
-  }
-  return def._constant;
-}
-
-/**
- * Looks up the given non-pointer type.
- */
-INLINE const ShaderType *SpirVModule::
-resolve_type(uint32_t id) const {
-  const Definition &def = _db.get_definition(id);
-  if (!def.is_type() || def.is_pointer_type()) {
-    error_expected(id, "a non-pointer type");
-    return nullptr;
-  }
-  return def._type;
-}
-
-/**
- * Looks up the type underneath the given pointer type.
- */
-INLINE const ShaderType *SpirVModule::
-resolve_pointer_type(uint32_t id) const {
-  const Definition &def = _db.get_definition(id);
-  if (!def.is_pointer_type()) {
-    error_expected(id, "a pointer type");
-    return nullptr;
-  }
-  return def._type;
-}
-
-/**
- * Returns the type id of the given id.
- */
-INLINE uint32_t SpirVModule::
-get_type_id(uint32_t id) const {
-  const Definition &def = _db.get_definition(id);
-  nassertr(def._type_id != 0, 0);
-  return def._type_id;
-}
-
-/**
- * Returns the pointee type id of the given pointer type id.
- */
-INLINE uint32_t SpirVModule::
-unwrap_pointer_type(uint32_t id) const {
-  const Definition &def = _db.get_definition(id);
-  if (!def.is_pointer_type()) {
-    return error_expected(id, "a pointer type");
-  }
-  return def._type_id;
-}
-
-/**
- * Marks the variable that the given id (indirectly) originates from as used.
- */
-INLINE void SpirVModule::
-mark_used(uint32_t id) {
-  _db.mark_used(id);
+  TypeMap::const_iterator tit = _type_map.find(type);
+  return tit != _type_map.end() && tit->second == type_id;
 }
 
 /**

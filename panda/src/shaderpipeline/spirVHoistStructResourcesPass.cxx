@@ -27,12 +27,11 @@ run(SpirVModule &module) {
 
   // Assign names to the hoisted variables, before the deletions below erase
   // the names of the variables they were hoisted out of.
-  const SpirVResultDatabase &db = module.get_db();
   for (const auto &item : _hoisted_vars) {
     const AccessChain &access_chain = item.first;
     uint32_t var_id = item.second;
 
-    std::string name = db.get_definition(access_chain._var_id)._name;
+    std::string name = module.get_name(access_chain._var_id);
     if (!name.empty()) {
       for (size_t i = 0; i < access_chain.size(); ++i) {
         name += "_m" + format_string(access_chain[i]);
@@ -48,6 +47,20 @@ run(SpirVModule &module) {
 }
 
 /**
+ * Returns the original (pre-deletion) type id of the given member of the
+ * given struct, which may differ from the module's current members.
+ */
+uint32_t SpirVHoistStructResourcesPass::
+get_original_member_type_id(SpirVModule &module, uint32_t struct_id, uint32_t index) const {
+  auto it = _original_members.find(struct_id);
+  if (it != _original_members.end()) {
+    nassertr(index < it->second.size(), 0);
+    return it->second[index];
+  }
+  return module.get_member_type_id(struct_id, index);
+}
+
+/**
  * Walks the globals section (in declaration order, so that a type is
  * processed before its users), collecting the types to hoist, rewriting the
  * affected struct, function type and variable declarations, and creating the
@@ -55,8 +68,6 @@ run(SpirVModule &module) {
  */
 void SpirVHoistStructResourcesPass::
 process_globals(SpirVModule &module) {
-  SpirVResultDatabase &db = module.modify_db();
-
   // The walk appends declarations (pointer types, hoisted variables); only
   // the original declarations are visited.
   size_t num_globals = module.get_globals().size();
@@ -84,18 +95,13 @@ process_globals(SpirVModule &module) {
     case spv::OpTypeStruct:
       if (op.args.size() >= 2) {
         uint32_t type_id = op.args[0];
-        Definition &def = db.modify_definition(type_id);
-        const ShaderType::Struct *struct_type;
-        DCAST_INTO_V(struct_type, def._type);
-        (void)struct_type;
 
-        // Keep the original member definitions around for the function body
+        // Keep the original member type ids around for the function body
         // rewrite, which needs to resolve pre-deletion member indices.
-        SpirVResultDatabase::MemberDefinitions original_members = def._members;
+        pvector<uint32_t> original_members(op.args.data() + 1, op.args.data() + op.args.size());
         pvector<int> remap(op.args.size() - 1, -1);
 
         // Does this contain a type we should hoist?
-        ShaderType::Struct new_struct;
         bool changed = false;
         uint32_t num_kept = 0;
         for (size_t ai = 1; ai < op.args.size(); ++ai) {
@@ -124,20 +130,7 @@ process_globals(SpirVModule &module) {
             module.delete_struct_member(type_id, num_kept);
             changed = true;
           }
-          else if (original_members[member_index]._builtin != spv::BuiltInMax) {
-            // Leave built-in members untouched--we never add this to the struct
-            // type definition in Panda3D.
-            remap[member_index] = (int)num_kept;
-            ++num_kept;
-          }
           else {
-            const MemberDefinition &member_def = original_members[member_index];
-            const ShaderType *member_type = module.resolve_type(member_def._type_id);
-            if (member_def._offset >= 0) {
-              new_struct.add_member(member_type, member_def._name, (uint32_t)member_def._offset);
-            } else {
-              new_struct.add_member(member_type, member_def._name);
-            }
             remap[member_index] = (int)num_kept;
             ++num_kept;
           }
@@ -162,15 +155,7 @@ process_globals(SpirVModule &module) {
           // anymore, however, so pointers, variables and function parameters
           // of it are removed below.
           _emptied_structs.insert(type_id);
-
-          // A fresh parse considers all members of a memberless struct to be
-          // (vacuously) readonly and writeonly and flags the struct
-          // accordingly; mirror that to keep the database consistent.
-          def._flags |= SpirVResultDatabase::DF_non_writable |
-                        SpirVResultDatabase::DF_non_readable;
         }
-
-        def._type = ShaderType::register_type(std::move(new_struct));
       }
       break;
 
@@ -214,9 +199,7 @@ process_globals(SpirVModule &module) {
           // The pointee type was deleted, or was emptied to the point that
           // nothing can be accessed through this pointer anymore.
           _deleted.insert(op.args[0]);
-          break;
         }
-        db.modify_definition(op.args[0])._type = module.resolve_type(op.args[2]);
       }
       break;
 
@@ -236,7 +219,7 @@ process_globals(SpirVModule &module) {
           nassertd(!_affected_types.count(arg)) continue;
 
           if (_affected_pointer_types.count(arg)) {
-            auto ait = _affected_types.find(db.get_definition(arg)._type_id);
+            auto ait = _affected_types.find(module.unwrap_pointer_type(arg));
             nassertd(ait != _affected_types.end()) continue;
 
             // Passing a struct with non-opaque types to a function.  That
@@ -248,19 +231,16 @@ process_globals(SpirVModule &module) {
           }
         }
 
-        // Update the declaration and the recorded parameter list.  Note that
-        // there is a slight chance that this could introduce a duplicate
-        // function type, which is illegal SPIR-V; the deduplication that
-        // runs after the pass merges those.
-        db.modify_definition(op.args[0])._parameters =
-          pvector<uint32_t>(new_args.data() + 2, new_args.data() + new_args.size());
+        // Update the declaration.  Note that there is a slight chance that
+        // this could introduce a duplicate function type, which is illegal
+        // SPIR-V; the deduplication that runs after the pass merges those.
         module.modify_globals()[i].args = std::move(new_args);
       }
       break;
 
     case spv::OpVariable:
       if (op.args.size() >= 3) {
-        uint32_t type_id = db.get_definition(op.args[0])._type_id;
+        uint32_t type_id = module.unwrap_pointer_type(op.args[0]);
 
         // If the struct contained only resources, the variable is deleted, but
         // the resources therein must of course still be hoisted out of it.
@@ -271,11 +251,6 @@ process_globals(SpirVModule &module) {
         if (ait != _affected_types.end()) {
           uint32_t var_id = op.args[1];
           spv::StorageClass storage_class = (spv::StorageClass)op.args[2];
-
-          if (!remove) {
-            // The struct type has been rebuilt without the hoisted members.
-            db.modify_definition(var_id)._type = module.resolve_type(type_id);
-          }
 
           for (const auto &pair : ait->second) {
             const ShaderType *new_type = pair.first;
@@ -307,16 +282,13 @@ process_globals(SpirVModule &module) {
  */
 void SpirVHoistStructResourcesPass::
 process_function(SpirVModule &module, Function &function) {
-  SpirVResultDatabase &db = module.modify_db();
-
   for (size_t i = 0; i < function.instructions.size(); ++i) {
     Instruction &op = function.instructions[i];
 
     switch (op.opcode) {
     case spv::OpFunctionParameter:
       // Erase parameters of deleted types, and insert parameters for the
-      // variables hoisted out of structs passed in.  The recorded parameter
-      // lists are reconciled after the pass.
+      // variables hoisted out of structs passed in.
       if (op.args.size() >= 2) {
         uint32_t param_type_id = op.args[0];
         uint32_t param_id = op.args[1];
@@ -331,7 +303,7 @@ process_function(SpirVModule &module, Function &function) {
         nassertv(!_affected_types.count(param_type_id));
 
         if (_affected_pointer_types.count(param_type_id)) {
-          auto ait = _affected_types.find(db.get_definition(param_type_id)._type_id);
+          auto ait = _affected_types.find(module.unwrap_pointer_type(param_type_id));
           nassertv(ait != _affected_types.end());
 
           // Passing a struct with non-opaque types to a function.  That means
@@ -345,8 +317,6 @@ process_function(SpirVModule &module, Function &function) {
             AccessChain access_chain(pair.second);
             access_chain._var_id = param_id;
             _hoisted_vars[std::move(access_chain)] = id;
-
-            db.record_function_parameter(id, type_ptr_id, function.id);
           }
           i = builder.get_insertion_index() - 1;
         }
@@ -365,7 +335,7 @@ process_function(SpirVModule &module, Function &function) {
           --i;
           break;
         }
-        uint32_t result_type_id = db.get_definition(result_pointer_type_id)._type_id;
+        uint32_t result_type_id = module.unwrap_pointer_type(result_pointer_type_id);
 
         if (is_deleted(result_type_id)) {
           // Empty struct, so access chain must also be deleted.
@@ -377,19 +347,9 @@ process_function(SpirVModule &module, Function &function) {
 
         // Walk through the access chain.  The base variable and its pointer
         // type may be slated for deletion (if the struct contained nothing
-        // but resources), but their definitions are still intact.
-        uint32_t base_pointer_type_id = db.get_definition(op.args[2])._type_id;
-        uint32_t parent_id = db.get_definition(base_pointer_type_id)._type_id;
-
-        // Returns the original member definitions of the given struct, which
-        // may differ from the module's current (post-deletion) members.
-        auto get_members = [this, &db](uint32_t struct_id) -> const SpirVResultDatabase::MemberDefinitions & {
-          auto it = _original_members.find(struct_id);
-          if (it != _original_members.end()) {
-            return it->second;
-          }
-          return db.get_definition(struct_id)._members;
-        };
+        // but resources), but their declarations are still intact.
+        uint32_t base_pointer_type_id = module.get_type_id(op.args[2]);
+        uint32_t parent_id = module.unwrap_pointer_type(base_pointer_type_id);
 
         if (_hoist_types.count(result_type_id)) {
           // Construct the access chain with just struct members, to figure
@@ -399,17 +359,17 @@ process_function(SpirVModule &module, Function &function) {
           pvector<uint32_t> new_args({op.args[0], op.args[1], op.args[2]});
 
           for (size_t ai = 3; ai < op.args.size(); ++ai) {
-            const Definition &def = db.get_definition(parent_id);
-            if (def._members.empty() && !_original_members.count(parent_id)) { // array
-              parent_id = def._type_id;
+            const Instruction *parent_decl = module.get_decl(parent_id);
+            nassertv(parent_decl != nullptr);
+            if (parent_decl->opcode != spv::OpTypeStruct) { // array
+              parent_id = module.get_composite_member_type_id(parent_id, 0);
               nassertv(parent_id > 0);
               new_args.push_back(op.args[ai]);
             } else {
-              // Must be a struct.
               uint32_t index = module.resolve_constant(op.args[ai]);
               access_chain.append(index);
 
-              parent_id = get_members(parent_id)[index]._type_id;
+              parent_id = get_original_member_type_id(module, parent_id, index);
             }
           }
 
@@ -422,13 +382,11 @@ process_function(SpirVModule &module, Function &function) {
           auto hit = _hoisted_vars.find(access_chain);
           nassertv(hit != _hoisted_vars.end());
           uint32_t new_var_id = hit->second;
-          db.mark_used(new_var_id);
 
           // Change the access chain to remove the struct member indices, and
           // the base id to our variable.
           new_args[2] = new_var_id;
           op.args = std::move(new_args);
-          db.set_origin(op.args[1], op.args[2]);
           break;
         }
 
@@ -443,14 +401,16 @@ process_function(SpirVModule &module, Function &function) {
           bool deleted_member = false;
 
           for (size_t ai = 3; ai < op.args.size(); ++ai) {
-            const Definition &def = db.get_definition(parent_id);
-            if (def._type != nullptr && def._type->as_array() != nullptr) {
-              parent_id = def._type_id;
+            const Instruction *parent_decl = module.get_decl(parent_id);
+            nassertv(parent_decl != nullptr);
+            if (parent_decl->opcode == spv::OpTypeArray ||
+                parent_decl->opcode == spv::OpTypeRuntimeArray) {
+              parent_id = module.get_composite_member_type_id(parent_id, 0);
               new_args.push_back(op.args[ai]);
               hoisted_new_args.push_back(op.args[ai]);
               nassertv(parent_id > 0);
             }
-            else if (def._type != nullptr && def._type->as_struct() != nullptr) {
+            else if (parent_decl->opcode == spv::OpTypeStruct) {
               uint32_t index = module.resolve_constant(op.args[ai]);
 
               int new_index = (int)index;
@@ -472,7 +432,7 @@ process_function(SpirVModule &module, Function &function) {
               }
               access_chain.append((uint32_t)new_index);
 
-              parent_id = get_members(parent_id)[index]._type_id;
+              parent_id = get_original_member_type_id(module, parent_id, index);
             }
             else {
               // Indexing into a non-aggregate composite type (vector/matrix).
@@ -511,7 +471,6 @@ process_function(SpirVModule &module, Function &function) {
               hoisted_new_args[1] = id;
               hoisted_new_args[2] = hoisted_var_id;
               builder.insert(spv::OpAccessChain, hoisted_new_args.data(), hoisted_new_args.size());
-              db.record_temporary(id, hoisted_type_ptr_id, hoisted_var_id, function.id);
 
               AccessChain new_access_chain(pair.second);
               new_access_chain._var_id = orig_chain_id;
@@ -529,7 +488,7 @@ process_function(SpirVModule &module, Function &function) {
 
         for (size_t ai = 3; ai < op.args.size(); ++ai) {
           uint32_t arg = op.args[ai];
-          uint32_t arg_type_id = db.get_definition(arg)._type_id;
+          uint32_t arg_type_id = module.get_type_id(arg);
           if (!is_deleted(arg_type_id) && !is_deleted(arg)) {
             new_args.push_back(arg);
           }
@@ -538,7 +497,7 @@ process_function(SpirVModule &module, Function &function) {
           nassertd(!_affected_types.count(arg_type_id)) continue;
 
           if (_affected_pointer_types.count(arg_type_id)) {
-            auto ait = _affected_types.find(db.get_definition(arg_type_id)._type_id);
+            auto ait = _affected_types.find(module.unwrap_pointer_type(arg_type_id));
             nassertd(ait != _affected_types.end()) continue;
 
             // Passing a struct with non-opaque types to a function.  That means
@@ -549,10 +508,7 @@ process_function(SpirVModule &module, Function &function) {
 
               auto hit = _hoisted_vars.find(access_chain);
               nassertv(hit != _hoisted_vars.end());
-              uint32_t hoisted_var_id = hit->second;
-              db.mark_used(hoisted_var_id);
-
-              new_args.push_back(hoisted_var_id);
+              new_args.push_back(hit->second);
             }
           }
         }
@@ -586,9 +542,6 @@ process_function(SpirVModule &module, Function &function) {
       // people actually do this, we can add support.
       nassertv(!_affected_types.count(op.args[0]));
       nassertv(!is_deleted(op.args[2]));
-
-      db.set_origin(op.args[1], op.args[2]);
-      db.mark_used(op.args[2]);
       break;
 
     case spv::OpCopyObject:
@@ -606,36 +559,11 @@ process_function(SpirVModule &module, Function &function) {
       }
       break;
 
-    case spv::OpImage:
-      {
-        Definition &def = db.modify_definition(op.args[1]);
-        def._origin_id = db.get_definition(op.args[2])._origin_id;
-        def._flags |= SpirVResultDatabase::DF_sampled_image;
-      }
-      break;
-
-    case spv::OpSampledImage:
-      db.set_origin(op.args[1], op.args[2]);
-      break;
-
-    case spv::OpImageQuerySizeLod:
-    case spv::OpImageQuerySize:
-    case spv::OpImageQueryLevels:
-      {
-        uint32_t var_id = db.get_definition(op.args[2])._origin_id;
-        if (var_id != 0) {
-          db.modify_definition(var_id)._flags |= SpirVResultDatabase::DF_queried_image_size_levels;
-        }
-      }
-      break;
-
     case spv::OpReturnValue:
       // Cannot return a struct with an opaque type from a function.
       if (op.args.size() >= 1) {
-        uint32_t value_id = op.args[0];
         uint32_t type_id = module.get_type_id(op.args[0]);
-        db.mark_used(value_id);
-        nassertv(!is_deleted(value_id));
+        nassertv(!is_deleted(op.args[0]));
         nassertv(!is_deleted(type_id));
         nassertv(!_affected_types.count(type_id));
         nassertv(!_affected_pointer_types.count(type_id));

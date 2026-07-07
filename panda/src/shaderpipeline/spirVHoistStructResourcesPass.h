@@ -35,6 +35,8 @@ private:
     return _deleted.count(id) != 0;
   }
 
+  uint32_t get_original_member_type_id(SpirVModule &module, uint32_t struct_id, uint32_t index) const;
+
   // Remove structs that became empty due to only containing resources.
   const bool _remove_empty_structs;
 
@@ -42,7 +44,7 @@ private:
   pset<uint32_t> _hoist_types;
 
   // Ids whose declarations serve no further purpose.  The deletion is
-  // applied at the end of the pass, so that the definitions remain
+  // applied at the end of the pass, so that the declarations remain
   // queryable while the function bodies are being rewritten.
   pset<uint32_t> _deleted;
 
@@ -54,10 +56,10 @@ private:
   // further purpose and are removed.
   pset<uint32_t> _emptied_structs;
 
-  // For each modified struct, a copy of its original member definitions (the
-  // module's own member lists shrink as members are deleted), plus the map
-  // from original member index to post-deletion index (-1 if deleted).
-  pmap<uint32_t, SpirVResultDatabase::MemberDefinitions> _original_members;
+  // For each modified struct, a snapshot of its original member type ids
+  // (the module's own member lists shrink as members are deleted), plus the
+  // map from original member index to post-deletion index (-1 if deleted).
+  pmap<uint32_t, pvector<uint32_t> > _original_members;
   pmap<uint32_t, pvector<int> > _member_remap;
 
   // This stores the type IDs of all the types that (indirectly) contain the

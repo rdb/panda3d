@@ -24,9 +24,7 @@ SpirVTransformer(const InstructionStream &stream) : _module(stream) {
 /**
  * Runs the given transformation pass object (which can be used only once) on
  * the module.  Afterwards, merges any duplicate unique-type declarations the
- * pass may have created and reconciles the database with the module, so that
- * the database always ends up identical to a fresh parse of the result (see
- * validate_db).
+ * pass may have created.
  */
 void SpirVTransformer::
 run(SpirVTransformPass &pass) {
@@ -37,7 +35,6 @@ run(SpirVTransformPass &pass) {
   pass.run(_module);
 
   _module.deduplicate_types();
-  _module.reparse_db();
 }
 
 /**
@@ -49,205 +46,163 @@ get_result() const {
 }
 
 /**
- * Checks that the definition database, which is updated incrementally by the
- * transform passes and reconciled after each pass, is consistent with a
- * database that is freshly parsed from the resulting module.  Logs an error
- * for every mismatch and returns false if any was found.  Intended for
- * validation in the test suite.
- *
- * Names are not compared, since the database keeps qualified names (such as
- * "block.member" after running SpirVFlattenStructPass) that intentionally
- * differ from the names stored in the module.  Usage tracking is compared in
- * one direction only: the passes may conservatively consider a definition
- * used, but a variable or function parameter that the module uses must never
- * be marked unused, or SpirVRemoveUnusedVariablesPass would delete it.
+ * Checks that the module's id index and memoized type resolutions - the only
+ * derived state the module keeps - are consistent with a fresh parse of the
+ * emitted module.  This catches a pass editing an instruction's result type
+ * in place without calling record_result, and a mutation path failing to
+ * invalidate the type resolutions.  Logs an error for every mismatch and
+ * returns false if any was found.  Intended for validation in the test
+ * suite.
  */
 bool SpirVTransformer::
-validate_db() const {
+validate() const {
   SpirVModule fresh(get_result());
   nassertr(get_id_bound() == fresh.get_id_bound(), false);
 
-  const SpirVResultDatabase &db = _module.get_db();
-  const SpirVResultDatabase &fresh_db = fresh.get_db();
-
   bool consistent = true;
-  auto report = [&](uint32_t id, const char *field, int64_t db_value, int64_t fresh_value) {
+  auto report = [&](uint32_t id, const char *field, int64_t value, int64_t fresh_value) {
     shader_cat.error()
-      << "Inconsistent database after transformation: id " << id << " has "
-      << field << " " << db_value << ", but " << fresh_value
+      << "Inconsistent id index after transformation: id " << id << " has "
+      << field << " " << value << ", but " << fresh_value
       << " when parsed from the module\n";
     consistent = false;
   };
 
-  // Decoration-derived flags that both the incremental updates and a fresh
-  // parse must agree on.  Usage-tracking flags are excluded.
-  static const int flag_mask =
-    SpirVResultDatabase::DF_buffer_block |
-    SpirVResultDatabase::DF_block |
-    SpirVResultDatabase::DF_non_writable |
-    SpirVResultDatabase::DF_non_readable |
-    SpirVResultDatabase::DF_relaxed_precision |
-    SpirVResultDatabase::DF_flat;
-
-  // Member decorations that affect the database and should round-trip.
-  static const int member_flag_mask =
-    SpirVResultDatabase::DF_non_writable |
-    SpirVResultDatabase::DF_non_readable |
-    SpirVResultDatabase::DF_flat;
-
-  // The instructions inserted by a pass may record the results of arithmetic
-  // operations as fully-typed temporaries, whereas parse_instruction only
-  // records the result type id for these, or the other way around.  Consider
-  // these definitions equivalent as long as the type id matches.
-  auto is_expression = [](const Definition &def) {
-    return def.is_temporary() || def._dtype == 0 /* DT_none */;
-  };
-
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &db_def = db.get_definition(id);
-    const Definition &fresh_def = fresh_db.get_definition(id);
+    SpirVModule::IdKind kind = _module.get_kind(id);
+    SpirVModule::IdKind fresh_kind = fresh.get_kind(id);
 
-    if (db_def._dtype != fresh_def._dtype) {
-      if (!is_expression(db_def) || !is_expression(fresh_def)) {
-        report(id, "definition type", db_def._dtype, fresh_def._dtype);
-      }
-      else if (db_def._type_id != fresh_def._type_id) {
-        report(id, "type id", db_def._type_id, fresh_def._type_id);
-      }
-      // The other fields are meaningless if the definition type differs.
+    if (kind != fresh_kind) {
+      report(id, "kind", (int64_t)kind, (int64_t)fresh_kind);
+      continue;
+    }
+    if (kind == SpirVModule::IdKind::NONE) {
       continue;
     }
 
-    if (db_def._type != fresh_def._type) {
-      bool equivalent = false;
-      if (db_def._type == nullptr || fresh_def._type == nullptr) {
-        // A fresh parse doesn't resolve the type of arithmetic results, so
-        // only require the type id to match in that case.
-        equivalent = (db_def._type_id == fresh_def._type_id);
-      }
-      else if (const ShaderType::StorageBuffer *sbuffer = fresh_def._type->as_storage_buffer()) {
-        // A buffer declared the legacy way (Uniform storage class with the
-        // BufferBlock decoration) is canonicalized to a StorageBuffer type
-        // when parsed, but the passes work with the unwrapped struct type.
-        equivalent = (sbuffer->get_contained_type() == db_def._type);
-      }
-      if (!equivalent) {
-        shader_cat.error()
-          << "Inconsistent database after transformation: id " << id << " has type ";
-        if (db_def._type != nullptr) {
-          shader_cat.error(false) << *db_def._type;
-        } else {
-          shader_cat.error(false) << "(null)";
-        }
-        shader_cat.error(false) << ", but ";
-        if (fresh_def._type != nullptr) {
-          shader_cat.error(false) << *fresh_def._type;
-        } else {
-          shader_cat.error(false) << "(null)";
-        }
-        shader_cat.error(false) << " when parsed from the module\n";
-        consistent = false;
+    if (kind != SpirVModule::IdKind::TYPE &&
+        kind != SpirVModule::IdKind::POINTER_TYPE &&
+        kind != SpirVModule::IdKind::FUNCTION_TYPE &&
+        kind != SpirVModule::IdKind::EXT_INST &&
+        kind != SpirVModule::IdKind::STRING) {
+      // The index mirrors the result type operand for values; the mirror
+      // must match what the instructions say.
+      uint32_t type_id = _module.get_type_id(id);
+      uint32_t fresh_type_id = fresh.get_type_id(id);
+      if (type_id != fresh_type_id) {
+        report(id, "type id", type_id, fresh_type_id);
       }
     }
-    if (db_def._type_id != fresh_def._type_id) {
-      report(id, "type id", db_def._type_id, fresh_def._type_id);
-    }
-    if (db_def._location != fresh_def._location) {
-      report(id, "location", db_def._location, fresh_def._location);
-    }
-    if (db_def._builtin != fresh_def._builtin) {
-      shader_cat.error()
-        << "Inconsistent database after transformation: id " << id
-        << " has builtin " << spv::BuiltInToString(db_def._builtin) << ", but "
-        << spv::BuiltInToString(fresh_def._builtin)
-        << " when parsed from the module\n";
-      consistent = false;
-    }
-    if ((db_def._flags & flag_mask) != (fresh_def._flags & flag_mask)) {
-      report(id, "flags", db_def._flags & flag_mask, fresh_def._flags & flag_mask);
-    }
-    if (db_def._array_stride != fresh_def._array_stride) {
-      report(id, "array stride", db_def._array_stride, fresh_def._array_stride);
+
+    if (_module.get_function_id(id) != fresh.get_function_id(id)) {
+      report(id, "function id", _module.get_function_id(id),
+             fresh.get_function_id(id));
     }
 
-    if ((db_def.is_constant() || db_def.is_spec_constant()) &&
-        db_def._constant != fresh_def._constant) {
-      report(id, "constant value", db_def._constant, fresh_def._constant);
-    }
-    if (db_def.is_spec_constant() && db_def._spec_id != fresh_def._spec_id) {
-      report(id, "spec id", db_def._spec_id, fresh_def._spec_id);
-    }
-    if ((db_def.is_variable() || db_def.is_pointer_type()) &&
-        db_def._storage_class != fresh_def._storage_class &&
-        // See above: parsing canonicalizes legacy-style buffer blocks to the
-        // StorageBuffer storage class.
-        !(db_def._storage_class == spv::StorageClassUniform &&
-          fresh_def._storage_class == spv::StorageClassStorageBuffer)) {
-      shader_cat.error()
-        << "Inconsistent database after transformation: id " << id
-        << " has storage class " << spv::StorageClassToString(db_def._storage_class)
-        << ", but " << spv::StorageClassToString(fresh_def._storage_class)
-        << " when parsed from the module\n";
-      consistent = false;
-    }
+    // The resolutions are derived from the same declarations by the same
+    // code, so a mismatch means a memoized resolution went stale (a mutation
+    // path failed to invalidate).
+    const ShaderType *type = nullptr;
+    const ShaderType *fresh_type = nullptr;
+    switch (kind) {
+    case SpirVModule::IdKind::TYPE:
+      type = _module.resolve_type(id);
+      fresh_type = fresh.resolve_type(id);
+      break;
 
-    // Usage is tracked conservatively by the passes, so a definition may be
-    // marked as used even if the module no longer uses it.  The reverse is a
-    // genuine problem, however: if a variable or function parameter that the
-    // module relies on is considered unused, SpirVRemoveUnusedVariablesPass
-    // would delete it.
-    if ((db_def.is_variable() || db_def.is_function_parameter()) &&
-        fresh_def.is_used() && !db_def.is_used()) {
-      shader_cat.error()
-        << "Inconsistent database after transformation: id " << id
-        << " is not marked as used, but the module uses it\n";
-      consistent = false;
-    }
-    if ((db_def.is_variable() || db_def.is_function_parameter() ||
-         db_def.is_temporary()) &&
-        db_def._function_id != fresh_def._function_id) {
-      report(id, "function id", db_def._function_id, fresh_def._function_id);
-    }
+    case SpirVModule::IdKind::POINTER_TYPE:
+      type = _module.resolve_pointer_type(id);
+      fresh_type = fresh.resolve_pointer_type(id);
+      break;
 
-    if (db_def.is_function() || db_def.is_function_type()) {
-      if (db_def._parameters.size() != fresh_def._parameters.size()) {
-        report(id, "parameter count", db_def._parameters.size(), fresh_def._parameters.size());
+    case SpirVModule::IdKind::VARIABLE:
+    case SpirVModule::IdKind::CONSTANT:
+    case SpirVModule::IdKind::SPEC_CONSTANT:
+    case SpirVModule::IdKind::PARAMETER:
+      type = _module.resolve_value_type(id);
+      fresh_type = fresh.resolve_value_type(id);
+      break;
+
+    default:
+      break;
+    }
+    if (type != fresh_type) {
+      shader_cat.error()
+        << "Inconsistent type resolution after transformation: id " << id
+        << " resolves to ";
+      if (type != nullptr) {
+        shader_cat.error(false) << *type;
       } else {
-        for (size_t pi = 0; pi < db_def._parameters.size(); ++pi) {
-          if (db_def._parameters[pi] != fresh_def._parameters[pi]) {
-            report(id, "parameter", db_def._parameters[pi], fresh_def._parameters[pi]);
-          }
+        shader_cat.error(false) << "(null)";
+      }
+      shader_cat.error(false) << ", but ";
+      if (fresh_type != nullptr) {
+        shader_cat.error(false) << *fresh_type;
+      } else {
+        shader_cat.error(false) << "(null)";
+      }
+      shader_cat.error(false) << " when parsed from the module\n";
+      consistent = false;
+    }
+  }
+
+  // Deleting an id cleans up the annotations *on* it, but a handful of
+  // annotation forms embed ids in their operands, and execution modes can
+  // reference constants; a pass that deletes an id these refer to must
+  // remove them itself, which is easy to forget.  Sweep for danglers.
+  auto check_reference = [&](uint32_t id, const char *referrer, uint32_t referrer_id) {
+    if (id == 0 || id >= get_id_bound() ||
+        _module.get_kind(id) == SpirVModule::IdKind::NONE) {
+      shader_cat.error()
+        << "Dangling reference after transformation: " << referrer << " on id "
+        << referrer_id << " refers to nonexistent id " << id << "\n";
+      consistent = false;
+    }
+  };
+
+  for (uint32_t id = 0; id < get_id_bound(); ++id) {
+    const SpirVModule::Annotations *annotations = _module.get_annotations(id);
+    if (annotations == nullptr) {
+      continue;
+    }
+    for (const SpirVModule::Annotation &annotation : *annotations) {
+      switch (annotation.opcode) {
+      case spv::OpDecorateId:
+        // Every operand after the decoration is an id.
+        for (size_t ai = 1; ai < annotation.args.size(); ++ai) {
+          check_reference(annotation.args[ai], "OpDecorateId", id);
         }
+        break;
+
+      case spv::OpGroupDecorate:
+        // Every operand is a decoration target.
+        for (size_t ai = 0; ai < annotation.args.size(); ++ai) {
+          check_reference(annotation.args[ai], "OpGroupDecorate", id);
+        }
+        break;
+
+      case spv::OpGroupMemberDecorate:
+        // Pairs of target id and member index.
+        for (size_t ai = 0; ai + 1 < annotation.args.size(); ai += 2) {
+          check_reference(annotation.args[ai], "OpGroupMemberDecorate", id);
+        }
+        break;
+
+      default:
+        break;
       }
     }
+  }
 
-    if (db_def._members.size() != fresh_def._members.size()) {
-      report(id, "member count", db_def._members.size(), fresh_def._members.size());
-    } else {
-      for (size_t mi = 0; mi < db_def._members.size(); ++mi) {
-        const MemberDefinition &db_member = db_def._members[mi];
-        const MemberDefinition &fresh_member = fresh_def._members[mi];
-        if (db_member._type_id != fresh_member._type_id) {
-          report(id, "member type id", db_member._type_id, fresh_member._type_id);
-        }
-        if (db_member._offset != fresh_member._offset) {
-          report(id, "member offset", db_member._offset, fresh_member._offset);
-        }
-        if (db_member._location != fresh_member._location) {
-          report(id, "member location", db_member._location, fresh_member._location);
-        }
-        if (db_member._builtin != fresh_member._builtin) {
-          report(id, "member builtin", db_member._builtin, fresh_member._builtin);
-        }
-        if ((db_member._flags & member_flag_mask) !=
-            (fresh_member._flags & member_flag_mask)) {
-          report(id, "member flags", db_member._flags & member_flag_mask,
-                 fresh_member._flags & member_flag_mask);
-        }
-        if (db_member._matrix_stride != fresh_member._matrix_stride) {
-          report(id, "member matrix stride", db_member._matrix_stride,
-                 fresh_member._matrix_stride);
-        }
+  for (const SpirVModule::Instruction &op : _module.get_execution_modes()) {
+    if (op.args.empty()) {
+      continue;
+    }
+    check_reference(op.args[0], "an execution mode", op.args[0]);
+    if (op.opcode == spv::OpExecutionModeId) {
+      // Every operand after the mode is an id (eg. LocalSizeId constants).
+      for (size_t ai = 2; ai < op.args.size(); ++ai) {
+        check_reference(op.args[ai], "OpExecutionModeId", op.args[0]);
       }
     }
   }
@@ -261,30 +216,33 @@ validate_db() const {
  */
 void SpirVTransformer::
 assign_interface_locations(ShaderModule::Stage stage) {
-  const SpirVResultDatabase &db = _module.get_db();
-
   // Determine which locations have already been assigned.
   bool has_unassigned_locations = false;
   BitArray input_locations;
   BitArray output_locations;
 
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &def = db.get_definition(id);
-    if (def.is_variable()) {
-      if (!def.has_location()) {
-        if (!def.is_builtin() &&
-            (def._storage_class == spv::StorageClassInput ||
-             def._storage_class == spv::StorageClassOutput)) {
-          // A non-built-in variable definition without a location.
-          has_unassigned_locations = true;
-        }
+    if (_module.get_kind(id) != SpirVModule::IdKind::VARIABLE ||
+        _module.get_function_id(id) != 0) {
+      continue;
+    }
+    spv::StorageClass storage_class = _module.get_storage_class(id);
+    int location = _module.get_location(id);
+    if (location < 0) {
+      if (_module.get_builtin(id) == spv::BuiltInMax &&
+          (storage_class == spv::StorageClassInput ||
+           storage_class == spv::StorageClassOutput)) {
+        // A non-built-in variable definition without a location.
+        has_unassigned_locations = true;
       }
-      else if (def._storage_class == spv::StorageClassInput) {
-        input_locations.set_range(def._location, def._type ? def._type->get_num_interface_locations() : 1);
-      }
-      else if (def._storage_class == spv::StorageClassOutput) {
-        output_locations.set_range(def._location, def._type ? def._type->get_num_interface_locations() : 1);
-      }
+    }
+    else if (storage_class == spv::StorageClassInput) {
+      const ShaderType *type = _module.resolve_value_type(id);
+      input_locations.set_range(location, type != nullptr ? type->get_num_interface_locations() : 1);
+    }
+    else if (storage_class == spv::StorageClassOutput) {
+      const ShaderType *type = _module.resolve_value_type(id);
+      output_locations.set_range(location, type != nullptr ? type->get_num_interface_locations() : 1);
     }
   }
 
@@ -293,61 +251,71 @@ assign_interface_locations(ShaderModule::Stage stage) {
   }
 
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &def = db.get_definition(id);
-    if (def.is_variable() && !def.has_location() && !def.is_builtin() &&
-        def._type != nullptr) {
-      int location;
-      int num_locations;
-      const char *sc_str;
+    if (_module.get_kind(id) != SpirVModule::IdKind::VARIABLE ||
+        _module.get_function_id(id) != 0 ||
+        _module.get_location(id) >= 0 ||
+        _module.get_builtin(id) != spv::BuiltInMax) {
+      continue;
+    }
+    const ShaderType *type = _module.resolve_value_type(id);
+    if (type == nullptr) {
+      continue;
+    }
+    spv::StorageClass storage_class = _module.get_storage_class(id);
 
-      if (def._storage_class == spv::StorageClassInput) {
-        num_locations = def._type->get_num_interface_locations();
-        if (num_locations == 0) {
-          continue;
-        }
+    int location;
+    int num_locations;
+    const char *sc_str;
 
-        if (stage == ShaderModule::Stage::VERTEX && !input_locations.get_bit(0) &&
-            def._name != "vertex" && def._name != "p3d_Vertex" &&
-            def._name != "vtx_position") {
-          // Leave location 0 open for the vertex position attribute.
-          location = input_locations.find_off_range(num_locations, 1);
-        } else {
-          location = input_locations.find_off_range(num_locations);
-        }
-        input_locations.set_range(location, num_locations);
-
-        sc_str = "input";
-      }
-      else if (def._storage_class == spv::StorageClassOutput) {
-        num_locations = def._type->get_num_interface_locations();
-        if (num_locations == 0) {
-          continue;
-        }
-
-        location = output_locations.find_off_range(num_locations);
-        output_locations.set_range(location, num_locations);
-
-        sc_str = "output";
-      }
-      else {
+    if (storage_class == spv::StorageClassInput) {
+      num_locations = type->get_num_interface_locations();
+      if (num_locations == 0) {
         continue;
       }
-      nassertd(location >= 0) continue;
 
-      if (shader_cat.is_debug()) {
-        if (num_locations == 1) {
-          shader_cat.debug()
-            << "Assigning " << def._name << " to " << sc_str << " location "
-            << location << "\n";
-        } else {
-          shader_cat.debug()
-            << "Assigning " << def._name << " to " << sc_str << " locations "
-            << location << ".." << (location + num_locations - 1) << "\n";
-        }
+      const std::string &name = _module.get_name(id);
+      if (stage == ShaderModule::Stage::VERTEX && !input_locations.get_bit(0) &&
+          name != "vertex" && name != "p3d_Vertex" &&
+          name != "vtx_position") {
+        // Leave location 0 open for the vertex position attribute.
+        location = input_locations.find_off_range(num_locations, 1);
+      } else {
+        location = input_locations.find_off_range(num_locations);
+      }
+      input_locations.set_range(location, num_locations);
+
+      sc_str = "input";
+    }
+    else if (storage_class == spv::StorageClassOutput) {
+      num_locations = type->get_num_interface_locations();
+      if (num_locations == 0) {
+        continue;
       }
 
-      _module.decorate(id, spv::DecorationLocation, (uint32_t)location);
+      location = output_locations.find_off_range(num_locations);
+      output_locations.set_range(location, num_locations);
+
+      sc_str = "output";
     }
+    else {
+      continue;
+    }
+    nassertd(location >= 0) continue;
+
+    if (shader_cat.is_debug()) {
+      if (num_locations == 1) {
+        shader_cat.debug()
+          << "Assigning " << _module.get_name(id) << " to " << sc_str
+          << " location " << location << "\n";
+      } else {
+        shader_cat.debug()
+          << "Assigning " << _module.get_name(id) << " to " << sc_str
+          << " locations " << location << ".."
+          << (location + num_locations - 1) << "\n";
+      }
+    }
+
+    _module.decorate(id, spv::DecorationLocation, (uint32_t)location);
   }
 }
 
@@ -366,23 +334,29 @@ assign_locations(pmap<uint32_t, int> remap) {
  */
 void SpirVTransformer::
 assign_flat_decorations() {
-  const SpirVResultDatabase &db = _module.get_db();
-
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    const Definition &def = db.get_definition(id);
-    if (def.is_variable() && !def.is_builtin() && def._storage_class == spv::StorageClassOutput && (def._flags & SpirVResultDatabase::DF_flat) == 0) {
-      if (def._type->contains_scalar_type(ShaderType::ST_int) ||
-          def._type->contains_scalar_type(ShaderType::ST_uint) ||
-          def._type->contains_scalar_type(ShaderType::ST_double)) {
-        // These must be flat.
-        const ShaderType *unwrapped = def._type;
-        while (const ShaderType::Array *array = unwrapped->as_array()) {
-          unwrapped = array->get_element_type();
-        }
-        //TODO: handle assigning "flat" to struct members.
-        if (unwrapped->as_struct() == nullptr) {
-          _module.decorate(id, spv::DecorationFlat);
-        }
+    if (_module.get_kind(id) != SpirVModule::IdKind::VARIABLE ||
+        _module.get_function_id(id) != 0 ||
+        _module.get_builtin(id) != spv::BuiltInMax ||
+        _module.get_storage_class(id) != spv::StorageClassOutput ||
+        _module.has_decoration(id, spv::DecorationFlat)) {
+      continue;
+    }
+    const ShaderType *type = _module.resolve_value_type(id);
+    if (type == nullptr) {
+      continue;
+    }
+    if (type->contains_scalar_type(ShaderType::ST_int) ||
+        type->contains_scalar_type(ShaderType::ST_uint) ||
+        type->contains_scalar_type(ShaderType::ST_double)) {
+      // These must be flat.
+      const ShaderType *unwrapped = type;
+      while (const ShaderType::Array *array = unwrapped->as_array()) {
+        unwrapped = array->get_element_type();
+      }
+      //TODO: handle assigning "flat" to struct members.
+      if (unwrapped->as_struct() == nullptr) {
+        _module.decorate(id, spv::DecorationFlat);
       }
     }
   }
@@ -405,14 +379,11 @@ assign_procedural_names(const char *prefix, const pmap<uint32_t, int> &suffixes)
  */
 void SpirVTransformer::
 strip_uniform_locations() {
-  SpirVResultDatabase &db = _module.modify_db();
-
   for (uint32_t id = 0; id < get_id_bound(); ++id) {
-    Definition &def = db.modify_definition(id);
-    if (def.is_variable() && def.has_location() &&
-        def._storage_class == spv::StorageClassUniformConstant) {
+    if (_module.get_kind(id) == SpirVModule::IdKind::VARIABLE &&
+        _module.get_function_id(id) == 0 &&
+        _module.get_storage_class(id) == spv::StorageClassUniformConstant) {
       _module.remove_decoration(id, spv::DecorationLocation);
-      def._location = -1;
     }
   }
 }

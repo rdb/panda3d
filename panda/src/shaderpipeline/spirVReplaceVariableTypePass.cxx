@@ -31,31 +31,32 @@ SpirVReplaceVariableTypePass(uint32_t variable_id, const ShaderType *type,
  */
 void SpirVReplaceVariableTypePass::
 run(SpirVModule &module) {
-  SpirVResultDatabase &db = module.modify_db();
-
   // Retype the variable declaration itself.
   {
-    Instruction *decl = module.get_global(_variable_id);
-    nassertv(decl != nullptr && decl->opcode == spv::OpVariable);
-
-    Definition &def = db.modify_definition(_variable_id);
     if (shader_cat.is_debug()) {
+      const ShaderType *old_type = module.resolve_value_type(_variable_id);
       shader_cat.debug()
-        << "Changing type of variable " << _variable_id << " (" << def._name
-        << ") from " << *def._type << " to " << *_new_type << "\n";
+        << "Changing type of variable " << _variable_id << " ("
+        << module.get_name(_variable_id) << ") from ";
+      if (old_type != nullptr) {
+        shader_cat.debug(false) << *old_type;
+      } else {
+        shader_cat.debug(false) << "(unknown)";
+      }
+      shader_cat.debug(false) << " to " << *_new_type << "\n";
     }
+
     _pointer_type_id = module.define_pointer_type(_new_type, _new_storage_class);
     _type_id = module.unwrap_pointer_type(_pointer_type_id);
 
+    // Fetch the declaration only now; defining the pointer type may have
+    // appended to the globals section.
+    Instruction *decl = module.get_global(_variable_id);
+    nassertv(decl != nullptr && decl->opcode == spv::OpVariable);
+
     decl->args[0] = _pointer_type_id;
     decl->args[2] = (uint32_t)_new_storage_class;
-
-    def._type = _new_type;
-    def._type_id = _pointer_type_id;
-    def._storage_class = _new_storage_class;
-    if (def.is_used()) {
-      db.mark_used(_variable_id);
-    }
+    module.record_result(*decl, 0);
   }
 
   // Now fix up all the loads and copies of the variable.
@@ -66,13 +67,16 @@ run(SpirVModule &module) {
         if (_pointer_ids.count(function.instructions[i].args[2])) {
           uint32_t result_id = function.instructions[i].args[1];
           uint32_t var_id = function.instructions[i].args[2];
-          Definition &def = db.modify_definition(result_id);
+
+          // The type the rest of the shader expects to load.
+          const ShaderType *result_type = module.resolve_value_type(result_id);
+          nassertv(result_type != nullptr);
 
           // If both are vectors or scalars, we can try a conversion.
           const ShaderType::Vector *old_vector = _new_type->as_vector();
           const ShaderType::Scalar *old_scalar = _new_type->as_scalar();
-          const ShaderType::Vector *new_vector = def._type->as_vector();
-          const ShaderType::Scalar *new_scalar = def._type->as_scalar();
+          const ShaderType::Vector *new_vector = result_type->as_vector();
+          const ShaderType::Scalar *new_scalar = result_type->as_scalar();
           if ((old_vector != nullptr && new_vector != nullptr && old_vector != new_vector) ||
               (old_scalar != nullptr && new_scalar != nullptr && old_scalar != new_scalar) ||
               (old_vector != nullptr && new_scalar != nullptr) ||
@@ -147,10 +151,8 @@ run(SpirVModule &module) {
             i = orig - 1;
           }
           else {
-            def._type = _new_type;
-            def._type_id = _type_id;
-
             function.instructions[i].args[0] = _type_id;
+            module.record_result(function.instructions[i], function.id);
             _object_ids.insert(result_id);
           }
         }
@@ -177,10 +179,8 @@ run(SpirVModule &module) {
         // These loads turn a pointer into a dereferenced object.
         if (_pointer_ids.count(function.instructions[i].args[2])) {
           Instruction &op = function.instructions[i];
-          Definition &def = db.modify_definition(op.args[1]);
           op.args[0] = _type_id;
-          def._type = _new_type;
-          def._type_id = _type_id;
+          module.record_result(op, function.id);
           _object_ids.insert(op.args[1]);
         }
         break;
@@ -191,17 +191,13 @@ run(SpirVModule &module) {
         {
           Instruction &op = function.instructions[i];
           if (_pointer_ids.count(op.args[2])) {
-            Definition &def = db.modify_definition(op.args[1]);
             op.args[0] = _pointer_type_id;
-            def._type = _new_type;
-            def._type_id = _pointer_type_id;
+            module.record_result(op, function.id);
             _pointer_ids.insert(op.args[1]);
           }
           if (_object_ids.count(op.args[2])) {
-            Definition &def = db.modify_definition(op.args[1]);
             op.args[0] = _type_id;
-            def._type = _new_type;
-            def._type_id = _type_id;
+            module.record_result(op, function.id);
             _object_ids.insert(op.args[1]);
           }
         }
@@ -216,17 +212,13 @@ run(SpirVModule &module) {
           nassertd(_object_ids.count(op.args[3]) == _object_ids.count(op.args[4])) {}
 
           if (_pointer_ids.count(op.args[3])) {
-            Definition &def = db.modify_definition(op.args[1]);
             op.args[0] = _pointer_type_id;
-            def._type = _new_type;
-            def._type_id = _pointer_type_id;
+            module.record_result(op, function.id);
             _pointer_ids.insert(op.args[1]);
           }
           if (_object_ids.count(op.args[3])) {
-            Definition &def = db.modify_definition(op.args[1]);
             op.args[0] = _type_id;
-            def._type = _new_type;
-            def._type_id = _type_id;
+            module.record_result(op, function.id);
             _object_ids.insert(op.args[1]);
           }
         }

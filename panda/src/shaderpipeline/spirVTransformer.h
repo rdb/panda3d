@@ -25,8 +25,6 @@ class SpirVTransformPass;
  */
 class EXPCL_PANDA_SHADERPIPELINE SpirVTransformer {
 public:
-  using Definition = SpirVResultDatabase::Definition;
-  using MemberDefinition = SpirVResultDatabase::MemberDefinition;
   using InstructionStream = ShaderModuleSpirV::InstructionStream;
 
   SpirVTransformer(const InstructionStream &stream);
@@ -35,11 +33,11 @@ public:
   INLINE void run(SpirVTransformPass &&pass);
 
   InstructionStream get_result() const;
-  bool validate_db() const;
+  bool validate() const;
 
   INLINE uint32_t get_id_bound() const;
-  INLINE const SpirVResultDatabase &get_db() const;
   INLINE SpirVModule &get_module();
+  INLINE const SpirVModule &get_module() const;
 
   void assign_interface_locations(ShaderModule::Stage stage);
   void assign_locations(pmap<uint32_t, int> locations);

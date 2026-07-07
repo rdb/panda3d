@@ -10,6 +10,6 @@
 #include "spirVModule.cxx"
 #include "spirVRemoveUnusedVariablesPass.cxx"
 #include "spirVReplaceVariableTypePass.cxx"
-#include "spirVResultDatabase.cxx"
 #include "spirVTransformer.cxx"
+#include "spirVUsageAnalysis.cxx"
 #endif

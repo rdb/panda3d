@@ -63,41 +63,44 @@ mark_model_matrix(uint32_t id, bool inverse, bool transpose) {
 void SpirVInjectVertexTransformPass::
 run(SpirVModule &module) {
   _module = &module;
-  SpirVResultDatabase &db = module.modify_db();
 
   // Identify the vertex inputs of interest.
   for (uint32_t id = 0; id < module.get_id_bound(); ++id) {
-    const Definition &def = db.get_definition(id);
-
-    if (def.is_variable() && def._storage_class == spv::StorageClassInput) {
-      if (def._location >= 0) {
-        if (_transform_index_location == def._location) {
-          const ShaderType::Vector *vector = def._type->as_vector();
-          if (vector != nullptr &&
-              vector->get_num_components() >= 4 &&
-              (vector->get_scalar_type() == ShaderType::ST_uint || vector->get_scalar_type() == ShaderType::ST_int)) {
-            _transform_index_var_id = id;
-          }
-        }
-        else if (_transform_weight_location == def._location) {
-          const ShaderType::Vector *vector = def._type->as_vector();
-          if (vector != nullptr &&
-              vector->get_num_components() >= 4 &&
-              vector->get_scalar_type() == ShaderType::ST_float) {
-            _transform_weight_var_id = id;
-          }
-        }
-        else if (_instance_mat_location == def._location) {
-          _instance_mat_var_id = id;
-        }
-        else if (_anim_locations & (1u << def._location)) {
-          // This will be transformed.
-          _vertex_input_ids[id] = module.allocate_id();
+    if (module.get_kind(id) != IdKind::VARIABLE ||
+        module.get_function_id(id) != 0 ||
+        module.get_storage_class(id) != spv::StorageClassInput) {
+      continue;
+    }
+    int location = module.get_location(id);
+    if (location >= 0) {
+      if (_transform_index_location == location) {
+        const ShaderType *type = module.resolve_value_type(id);
+        const ShaderType::Vector *vector = (type != nullptr) ? type->as_vector() : nullptr;
+        if (vector != nullptr &&
+            vector->get_num_components() >= 4 &&
+            (vector->get_scalar_type() == ShaderType::ST_uint || vector->get_scalar_type() == ShaderType::ST_int)) {
+          _transform_index_var_id = id;
         }
       }
-      else if (def._builtin == spv::BuiltInInstanceIndex) {
-        _instance_index_var_id = id;
+      else if (_transform_weight_location == location) {
+        const ShaderType *type = module.resolve_value_type(id);
+        const ShaderType::Vector *vector = (type != nullptr) ? type->as_vector() : nullptr;
+        if (vector != nullptr &&
+            vector->get_num_components() >= 4 &&
+            vector->get_scalar_type() == ShaderType::ST_float) {
+          _transform_weight_var_id = id;
+        }
       }
+      else if (_instance_mat_location == location) {
+        _instance_mat_var_id = id;
+      }
+      else if (_anim_locations & (1u << location)) {
+        // This will be transformed.
+        _vertex_input_ids[id] = module.allocate_id();
+      }
+    }
+    else if (module.get_builtin(id) == spv::BuiltInInstanceIndex) {
+      _instance_index_var_id = id;
     }
   }
 
@@ -128,7 +131,7 @@ run(SpirVModule &module) {
     uint32_t var_id = swap.first;
     uint32_t new_id = swap.second;
 
-    Instruction *decl = module.get_global(var_id);
+    const Instruction *decl = module.get_decl(var_id);
     nassertd(decl != nullptr && decl->opcode == spv::OpVariable) continue;
 
     if (shader_cat.is_spam()) {
@@ -139,13 +142,10 @@ run(SpirVModule &module) {
 
     const ShaderType *type = module.resolve_pointer_type(decl->args[0]);
 
-    // The original declaration becomes the new input variable.
-    decl->args[1] = new_id;
-
-    Definition def = std::move(db.modify_definition(var_id));
-    db.modify_definition(var_id).clear();
-    db.modify_definition(new_id) = std::move(def);
-
+    // The original declaration becomes the new input variable, along with
+    // the decorations (location, builtin); the name stays with the private
+    // variable declared under the old id below.
+    module.reassign_global_id(var_id, new_id);
     module.transfer_annotations(var_id, new_id);
 
     // Declare the private variable under the old id.  The emit-time
@@ -155,7 +155,6 @@ run(SpirVModule &module) {
     module.add_global(Instruction(spv::OpVariable, {
       pointer_type_id, var_id, (uint32_t)spv::StorageClassPrivate,
     }));
-    db.record_variable(var_id, pointer_type_id, spv::StorageClassPrivate);
 
     _make_private_pointers.insert(var_id);
   }
@@ -170,8 +169,8 @@ run(SpirVModule &module) {
           op.args.size() >= 3 && _make_private_pointers.count(op.args[2])) {
         uint32_t type_id = module.unwrap_pointer_type(op.args[0]);
         uint32_t type_pointer_id = module.define_pointer_type(type_id, spv::StorageClassPrivate);
-        db.modify_definition(op.args[1])._type_id = type_pointer_id;
         op.args[0] = type_pointer_id;
+        module.record_result(op, function.id);
 
         _make_private_pointers.insert(op.args[1]);
       }
@@ -353,7 +352,6 @@ inject_animation(SpirVBuilder &builder, const pvector<uint32_t> &vars) {
   }
 
   SpirVModule &module = *_module;
-  const SpirVResultDatabase &db = module.get_db();
 
   // Make sure the skinning matrix buffer is defined.
   if (_transform_block_var_id == 0) {
@@ -378,8 +376,8 @@ inject_animation(SpirVBuilder &builder, const pvector<uint32_t> &vars) {
   uint32_t transform_weight = builder.op_load(_transform_weight_var_id);
 
   // How many components do we have?
-  const ShaderType::Vector *transform_index_type = db.get_definition(_transform_index_var_id)._type->as_vector();
-  const ShaderType::Vector *transform_weight_type = db.get_definition(_transform_weight_var_id)._type->as_vector();
+  const ShaderType::Vector *transform_index_type = module.resolve_value_type(_transform_index_var_id)->as_vector();
+  const ShaderType::Vector *transform_weight_type = module.resolve_value_type(_transform_weight_var_id)->as_vector();
   nassertv(transform_index_type != nullptr && transform_weight_type != nullptr);
   uint32_t num_components = std::min(transform_index_type->get_num_components(), transform_weight_type->get_num_components());
 
@@ -433,13 +431,13 @@ inject_animation(SpirVBuilder &builder, const pvector<uint32_t> &vars) {
     if (it != _vertex_input_ids.end()) {
       uint32_t input_vec_ptr = it->second;
 
-      const Definition &vec_def = db.get_definition(input_vec_ptr);
-      const ShaderType::Vector *vec_type = vec_def._type->as_vector();
+      const ShaderType *input_type = module.resolve_value_type(input_vec_ptr);
+      const ShaderType::Vector *vec_type = (input_type != nullptr) ? input_type->as_vector() : nullptr;
       if (vec_type == nullptr || vec_type->get_num_components() < 3) {
         continue;
       }
 
-      bool is_point = (_anim_point_locations & (1u << vec_def._location)) != 0;
+      bool is_point = (_anim_point_locations & (1u << module.get_location(input_vec_ptr))) != 0;
       uint32_t w = module.define_float_constant(is_point);
 
       uint32_t orig_vec = builder.op_load(input_vec_ptr);
@@ -483,7 +481,6 @@ inject_instancing(SpirVBuilder &builder) {
   }
 
   SpirVModule &module = *_module;
-  const SpirVResultDatabase &db = module.get_db();
 
   uint32_t inst_mat3x4;
 
@@ -522,7 +519,7 @@ inject_instancing(SpirVBuilder &builder) {
     if (pair.second._inverse) {
       need_inverse = true;
 
-      const ShaderType::Matrix *matrix = db.get_definition(pair.first)._type->as_matrix();
+      const ShaderType::Matrix *matrix = module.resolve_value_type(pair.first)->as_matrix();
       if (pair.second._transpose ? matrix->get_num_columns() == 4 : matrix->get_num_rows() == 4) {
         need_inverse_translation = true;
       }
@@ -598,7 +595,7 @@ inject_instancing(SpirVBuilder &builder) {
     uint32_t inst_mat = 0u;
 
     // Compose the right matrix for multiplying into the target matrix.
-    const ShaderType::Matrix *matrix = db.get_definition(orig_mat_ptr)._type->as_matrix();
+    const ShaderType::Matrix *matrix = module.resolve_value_type(orig_mat_ptr)->as_matrix();
     uint32_t mat_size = transpose ? matrix->get_num_columns() : matrix->get_num_rows();
 
     if (matrix->get_num_rows() == 3 && matrix->get_num_columns() == 4 && transpose) {

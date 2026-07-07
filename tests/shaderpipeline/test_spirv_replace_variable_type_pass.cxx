@@ -40,14 +40,14 @@ TEST_CASE("SpirVReplaceVariableTypePass converts loads to the old type", "[shade
     SpirVTransformer transformer(stream);
     transformer.run(SpirVReplaceVariableTypePass(id_var, ShaderType::INT,
                                                  spv::StorageClassUniformConstant));
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
 
     InstructionStream result = transformer.get_result();
     CHECK(result.validate());
 
     // The variable is now an int, and the loaded value is converted back to
     // float where it is used.
-    CHECK(transformer.get_db().get_definition(id_var)._type == ShaderType::INT);
+    CHECK(transformer.get_module().resolve_value_type(id_var) == ShaderType::INT);
     CHECK(count_op(result, spv::OpTypeInt) == 1);
     CHECK(count_op(result, spv::OpConvertSToF) == 1);
   }
@@ -59,11 +59,11 @@ TEST_CASE("SpirVReplaceVariableTypePass converts loads to the old type", "[shade
     SpirVTransformer transformer(stream);
     transformer.run(SpirVReplaceVariableTypePass(id_var, vec4_type,
                                                  spv::StorageClassUniformConstant));
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
 
     InstructionStream result = transformer.get_result();
     CHECK(result.validate());
-    CHECK(transformer.get_db().get_definition(id_var)._type == vec4_type);
+    CHECK(transformer.get_module().resolve_value_type(id_var) == vec4_type);
     CHECK(count_op(result, spv::OpCompositeExtract) == 1);
   }
 }
@@ -93,10 +93,10 @@ TEST_CASE("SpirVReplaceVariableTypePass replicates a scalar to a vector", "[shad
   SpirVTransformer transformer(stream);
   transformer.run(SpirVReplaceVariableTypePass(id_var, ShaderType::FLOAT,
                                                spv::StorageClassUniformConstant));
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
-  CHECK(transformer.get_db().get_definition(id_var)._type == ShaderType::FLOAT);
+  CHECK(transformer.get_module().resolve_value_type(id_var) == ShaderType::FLOAT);
   CHECK(count_op(result, spv::OpCompositeConstruct) == 1);
 }

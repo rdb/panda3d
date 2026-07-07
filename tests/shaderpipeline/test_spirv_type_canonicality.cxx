@@ -6,20 +6,20 @@
  * license.  You should have received a copy of this license along
  * with this source code in a file named "LICENSE."
  *
- * @file test_spirv_result_database.cxx
+ * @file test_spirv_type_canonicality.cxx
  * @author rdb
  * @date 2026-07-06
  */
 
-#include "spirVResultDatabase.h"
+#include "spirVTransformer.h"
 
 #include "spirv_test_utils.h"
 #include "catch_amalgamated.hpp"
 
-TEST_CASE("SpirVResultDatabase tracks type canonicality", "[shaderpipeline]") {
+TEST_CASE("SpirVModule tracks type canonicality", "[shaderpipeline]") {
   // A type declaration is "canonical" if it is declared exactly the way
   // define_type() would declare it for its ShaderType; only canonical
-  // declarations may be reused via the type map, since ShaderType does not
+  // declarations may be reused via find_type, since ShaderType does not
   // represent all SPIR-V type operands (bit widths, image depth/sampled/
   // format/multisample operands).  This module declares a zoo of canonical
   // and non-canonical variants; the canonical ones via define_type(), the
@@ -57,7 +57,7 @@ TEST_CASE("SpirVResultDatabase tracks type canonicality", "[shaderpipeline]") {
   const ShaderType *si_shadow_type = ShaderType::register_type(
     ShaderType::SampledImage(Texture::TT_cube_map, ShaderType::ST_float, true));
   uint32_t id_si_shadow = module.define_type(si_shadow_type);
-  uint32_t id_image_shadow = module.get_db().get_definition(id_si_shadow)._type_id;
+  uint32_t id_image_shadow = module.get_type_id(id_si_shadow);
 
   // Multisampledness is not represented on ShaderType at all, so neither the
   // image nor the sampled image over it may be considered canonical.
@@ -77,31 +77,31 @@ TEST_CASE("SpirVResultDatabase tracks type canonicality", "[shaderpipeline]") {
   uint32_t id_image_rgba8 =
     module.define_image_type(image_2d_type, 2, 2, spv::ImageFormatRgba8);
 
-  // Emit the module and parse it back, so that we are checking the database
-  // as freshly built by the parser, not as maintained by define_type().
+  // Emit the module and parse it back, so that we are checking the state as
+  // freshly derived by the parser, not as maintained by define_type().
   InstructionStream stream = module.emit();
   SpirVTransformer transformer(stream);
-  const SpirVResultDatabase &db = transformer.get_db();
+  const SpirVModule &parsed = transformer.get_module();
 
   // Scalars: only the widths that define_type() emits are canonical.
-  CHECK(!db.is_canonical_type(id_half));
-  CHECK(db.is_canonical_type(id_float));
-  CHECK(db.is_canonical_type(id_int));
-  CHECK(!db.is_canonical_type(id_long));
+  CHECK(!parsed.is_canonical_type(id_half));
+  CHECK(parsed.is_canonical_type(id_float));
+  CHECK(parsed.is_canonical_type(id_int));
+  CHECK(!parsed.is_canonical_type(id_long));
 
   // Composites: canonicality must cascade from the component type, or a
   // vec4 of 16-bit floats would be handed out for a request for a regular
   // vec4 (both map to the same ShaderType).
-  CHECK(db.is_canonical_type(id_v4float));
-  CHECK(!db.is_canonical_type(id_v4half));
-  CHECK(db.is_canonical_type(id_array_float));
-  CHECK(!db.is_canonical_type(id_array_half));
+  CHECK(parsed.is_canonical_type(id_v4float));
+  CHECK(!parsed.is_canonical_type(id_v4half));
+  CHECK(parsed.is_canonical_type(id_array_float));
+  CHECK(!parsed.is_canonical_type(id_array_half));
 
   // Images and sampled images.
-  CHECK(!db.is_canonical_type(id_image_shadow));
-  CHECK(db.is_canonical_type(id_si_shadow));
-  CHECK(!db.is_canonical_type(id_image_ms));
-  CHECK(!db.is_canonical_type(id_si_ms));
-  CHECK(db.is_canonical_type(id_image_storage));
-  CHECK(!db.is_canonical_type(id_image_rgba8));
+  CHECK(!parsed.is_canonical_type(id_image_shadow));
+  CHECK(parsed.is_canonical_type(id_si_shadow));
+  CHECK(!parsed.is_canonical_type(id_image_ms));
+  CHECK(!parsed.is_canonical_type(id_si_ms));
+  CHECK(parsed.is_canonical_type(id_image_storage));
+  CHECK(!parsed.is_canonical_type(id_image_rgba8));
 }

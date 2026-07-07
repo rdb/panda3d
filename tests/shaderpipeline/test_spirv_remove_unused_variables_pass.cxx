@@ -43,12 +43,12 @@ TEST_CASE("SpirVRemoveUnusedVariablesPass removes unused variables", "[shaderpip
 
   SpirVTransformer transformer(stream);
   transformer.run(SpirVRemoveUnusedVariablesPass());
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
   CHECK(!has_variable(result, id_unused));
   CHECK(has_variable(result, id_in_color));
   CHECK(has_variable(result, id_out_color));
-  CHECK(!transformer.get_db().get_definition(id_unused).is_variable());
+  CHECK(transformer.get_module().get_kind(id_unused) == SpirVModule::IdKind::NONE);
 }

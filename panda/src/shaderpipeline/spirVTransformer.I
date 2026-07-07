@@ -28,17 +28,17 @@ get_id_bound() const {
 }
 
 /**
- * Returns the result database.
+ * Returns the module being transformed.
  */
-INLINE const SpirVResultDatabase &SpirVTransformer::
-get_db() const {
-  return _module.get_db();
+INLINE SpirVModule &SpirVTransformer::
+get_module() {
+  return _module;
 }
 
 /**
  * Returns the module being transformed.
  */
-INLINE SpirVModule &SpirVTransformer::
-get_module() {
+INLINE const SpirVModule &SpirVTransformer::
+get_module() const {
   return _module;
 }

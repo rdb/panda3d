@@ -39,7 +39,7 @@ TEST_CASE("SpirVDebugOutputPass converts prints to buffer writes", "[shaderpipel
   SpirVTransformer transformer(stream);
   SpirVDebugOutputPass pass(Shader::Stage::FRAGMENT, debug_info, 3, 0);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -88,7 +88,7 @@ TEST_CASE("SpirVDebugOutputPass converts asserts to buffer writes", "[shaderpipe
   SpirVTransformer transformer(stream);
   SpirVDebugOutputPass pass(Shader::Stage::FRAGMENT, debug_info, 3, 0);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -104,10 +104,10 @@ TEST_CASE("SpirVDebugOutputPass converts asserts to buffer writes", "[shaderpipe
   CHECK(count_op(result, spv::OpAtomicIIncrement) == 1);
 
   bool found_frag_coord = false;
-  const SpirVResultDatabase &db = transformer.get_db();
+  const SpirVModule &out_module = transformer.get_module();
   for (uint32_t id = 0; id < transformer.get_id_bound(); ++id) {
-    const SpirVResultDatabase::Definition &def = db.get_definition(id);
-    if (def.is_variable() && def._builtin == spv::BuiltInFragCoord) {
+    if (out_module.get_kind(id) == SpirVModule::IdKind::VARIABLE &&
+        out_module.get_builtin(id) == spv::BuiltInFragCoord) {
       found_frag_coord = true;
     }
   }

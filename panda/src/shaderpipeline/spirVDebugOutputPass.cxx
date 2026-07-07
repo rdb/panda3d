@@ -31,24 +31,22 @@ SpirVDebugOutputPass(Shader::Stage stage, Shader::DebugInfo &debug_info,
 void SpirVDebugOutputPass::
 run(SpirVModule &module) {
   _module = &module;
-  const SpirVResultDatabase &db = module.get_db();
 
   // Identify the extended instruction sets we care about.  The DebugPrintf
   // import is removed, along with every instruction using it (below).
   pvector<uint32_t> deleted_imports;
-  for (uint32_t id = 0; id < module.get_id_bound(); ++id) {
-    const Definition &def = db.get_definition(id);
-    if (def.is_ext_inst()) {
-      if (def._name == "NonSemantic.DebugPrintf") {
-        _ext_inst_imports[id] = EI_nonsemantic_debugprintf;
-        deleted_imports.push_back(id);
-      }
-      else if (def._name == "NonSemantic.Shader.DebugInfo.100") {
-        _ext_inst_imports[id] = EI_nonsemantic_shader_debuginfo_100;
-      }
-      else {
-        _ext_inst_imports[id] = EI_other;
-      }
+  for (const Instruction &import : module.get_ext_inst_imports()) {
+    uint32_t id = import.args[0];
+    std::string name = import.get_string(1);
+    if (name == "NonSemantic.DebugPrintf") {
+      _ext_inst_imports[id] = EI_nonsemantic_debugprintf;
+      deleted_imports.push_back(id);
+    }
+    else if (name == "NonSemantic.Shader.DebugInfo.100") {
+      _ext_inst_imports[id] = EI_nonsemantic_shader_debuginfo_100;
+    }
+    else {
+      _ext_inst_imports[id] = EI_other;
     }
   }
 
@@ -85,11 +83,13 @@ run(SpirVModule &module) {
           get_ext_inst_import(op.args[2]) == EI_nonsemantic_debugprintf &&
           op.args[3] == 1 /*DebugPrintf*/) {
 
+        // Capture what we need; the print instruction is deleted below, and
+        // insertions invalidate the reference regardless.
+        uint32_t result_id = op.args[1];
+
 #ifndef NDEBUG
         std::string string = op.args.size() >= 5 ? module.resolve_string(op.args[4]) : std::string();
         if (!string.empty()) {
-          // Copy the arguments before the insertions invalidate the
-          // reference.
           pvector<uint32_t> fmt_args(op.args.data() + 5, op.args.data() + op.args.size());
 
           SpirVBuilder builder(module, function.id, i);
@@ -101,15 +101,16 @@ run(SpirVModule &module) {
             emit_printf(builder, string, fmt_args.data(), (uint32_t)fmt_args.size());
           }
 
-          size_t pos = builder.get_insertion_index();
-          function.instructions.erase(function.instructions.begin() + pos);
-          i = pos - 1;
+          // Delete the print instruction, which now follows the insertions.
+          // This tombstones it in place (and drops its id from the index);
+          // continue past it.
+          module.delete_id(result_id);
+          i = builder.get_insertion_index();
           continue;
         }
 #endif
         // Just remove the print instruction.
-        function.instructions.erase(function.instructions.begin() + i);
-        --i;
+        module.delete_id(result_id);
         continue;
       }
       else if (op.opcode == spv::OpExtInst && op.args.size() >= 4 &&
@@ -154,7 +155,6 @@ run(SpirVModule &module) {
 void SpirVDebugOutputPass::
 emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t *args, uint32_t nargs) {
   SpirVModule &module = *_module;
-  const SpirVResultDatabase &db = module.get_db();
 
   if (_buffer_block_var_id == 0) {
     define_buffer_block();
@@ -212,14 +212,14 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
     }
 
     uint32_t arg = args[arg_i++];
-    const Definition &arg_def = db.get_definition(arg);
-    if (arg_def.is_string()) {
+    if (module.get_kind(arg) == SpirVModule::IdKind::STRING) {
       //TODO: warn if fmt isn't %s
-      new_fmt += arg_def._name;
+      new_fmt += module.resolve_string(arg);
       continue;
     }
 
-    const ShaderType *arg_type = module.resolve_type(arg_def._type_id);
+    const ShaderType *arg_type = module.resolve_value_type(arg);
+    nassertd(arg_type != nullptr) continue;
 
     ShaderType::ScalarType scalar_type;
     uint32_t num_array_elements, num_rows, num_columns;
@@ -326,11 +326,6 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
   uint32_t offset = builder.allocate_id();
 
   builder.insert(spv::OpAtomicIAdd, {uint_type, offset, counter_ptr, one, zero, reservation});
-  {
-    Definition &def = module.modify_db().modify_definition(offset);
-    def._type_id = uint_type;
-    def._type = ShaderType::UINT;
-  }
 
   // We have to skip the assert section, which is a fixed-size 4-word-per-assert
   // section that lives at the beginning of the data array.
@@ -342,11 +337,6 @@ emit_printf(SpirVBuilder &builder, const std::string &fmt_string, const uint32_t
   // Get length of the data array in the SSBO
   uint32_t length = builder.allocate_id();
   builder.insert(spv::OpArrayLength, {uint_type, length, _buffer_block_var_id, 1});
-  {
-    Definition &def = module.modify_db().modify_definition(length);
-    def._type_id = uint_type;
-    def._type = ShaderType::UINT;
-  }
 
   // Bounds check to make sure we don't write outside the SSBO
   uint32_t branch = builder.branch_if(builder.op_compare(spv::OpULessThanEqual, builder.op_add(offset, reservation), length));
@@ -401,11 +391,6 @@ emit_assert(SpirVBuilder &builder, const std::string &expression) {
   uint32_t uint_type = module.define_type(ShaderType::UINT);
   uint32_t result = builder.allocate_id();
   builder.insert(spv::OpAtomicIIncrement, {uint_type, result, counter_ptr, one, zero});
-  {
-    Definition &def = module.modify_db().modify_definition(result);
-    def._type_id = uint_type;
-    def._type = ShaderType::UINT;
-  }
 
   // If we were the first occurrence, write the invocation ID as additional
   // helpful context information.

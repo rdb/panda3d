@@ -49,29 +49,29 @@ TEST_CASE("SpirVInjectVertexTransformPass injects transforms", "[shaderpipeline]
     SpirVInjectVertexTransformPass pass(false, false, 0, 0);
     pass.setup_animation(0x1, 0x1, 5, 6);
     transformer.run(pass);
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
 
     InstructionStream result = transformer.get_result();
     CHECK(result.validate());
 
-    const SpirVResultDatabase &db = transformer.get_db();
+    const SpirVModule &out_module = transformer.get_module();
 
     // A uniform block was added to hold the joint matrices, and vertex
     // columns were added for the transform indices and weights.
     REQUIRE(pass._transform_block_var_id != 0);
-    CHECK(db.get_definition(pass._transform_block_var_id)._storage_class == spv::StorageClassUniform);
+    CHECK(out_module.get_storage_class(pass._transform_block_var_id) == spv::StorageClassUniform);
 
     REQUIRE(pass._transform_index_var_id != 0);
-    CHECK(db.get_definition(pass._transform_index_var_id)._storage_class == spv::StorageClassInput);
-    CHECK(db.get_definition(pass._transform_index_var_id)._location == 5);
+    CHECK(out_module.get_storage_class(pass._transform_index_var_id) == spv::StorageClassInput);
+    CHECK(out_module.get_location(pass._transform_index_var_id) == 5);
 
     REQUIRE(pass._transform_weight_var_id != 0);
-    CHECK(db.get_definition(pass._transform_weight_var_id)._storage_class == spv::StorageClassInput);
-    CHECK(db.get_definition(pass._transform_weight_var_id)._location == 6);
+    CHECK(out_module.get_storage_class(pass._transform_weight_var_id) == spv::StorageClassInput);
+    CHECK(out_module.get_location(pass._transform_weight_var_id) == 6);
 
     // The original vertex input variable now refers to a private copy that is
     // written at the top of the entry point.
-    CHECK(db.get_definition(id_vertex)._storage_class == spv::StorageClassPrivate);
+    CHECK(out_module.get_storage_class(id_vertex) == spv::StorageClassPrivate);
   }
 
   SECTION("instancing multiplies in a matrix vertex attribute") {
@@ -80,24 +80,22 @@ TEST_CASE("SpirVInjectVertexTransformPass injects transforms", "[shaderpipeline]
     pass.setup_instancing_attrib(4);
     pass.mark_model_matrix(id_mv, false, false);
     transformer.run(pass);
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
 
     InstructionStream result = transformer.get_result();
     CHECK(result.validate());
 
-    const SpirVResultDatabase &db = transformer.get_db();
+    const SpirVModule &out_module = transformer.get_module();
 
     // A vertex column was added for the instance matrix.
     REQUIRE(pass._instance_mat_var_id != 0);
-    const SpirVResultDatabase::Definition &mat_def =
-      db.get_definition(pass._instance_mat_var_id);
-    CHECK(mat_def._storage_class == spv::StorageClassInput);
-    CHECK(mat_def._location == 4);
-    CHECK(mat_def._type ==
+    CHECK(out_module.get_storage_class(pass._instance_mat_var_id) == spv::StorageClassInput);
+    CHECK(out_module.get_location(pass._instance_mat_var_id) == 4);
+    CHECK(out_module.resolve_value_type(pass._instance_mat_var_id) ==
           ShaderType::register_type(ShaderType::Matrix(ShaderType::ST_float, 3, 4)));
 
     // The model-view matrix now refers to a private copy with the instance
     // matrix multiplied in.
-    CHECK(db.get_definition(id_mv)._storage_class == spv::StorageClassPrivate);
+    CHECK(out_module.get_storage_class(id_mv) == spv::StorageClassPrivate);
   }
 }

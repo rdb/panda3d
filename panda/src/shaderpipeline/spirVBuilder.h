@@ -18,10 +18,10 @@
 
 /**
  * Builds SPIR-V function bodies, inserting instructions into a SpirVModule
- * at a cursor position and recording their results in the module's id table
- * as it goes.  Used by the transformation passes to inject code, by the unit
- * tests to assemble input modules, and by the shader generator to build
- * modules from scratch.
+ * at a cursor position; every inserted instruction is recorded in the
+ * module's id index automatically.  Used by the transformation passes to
+ * inject code, by the unit tests to assemble input modules, and by the
+ * shader generator to build modules from scratch.
  *
  * The cursor addresses a function by index (not pointer, so that creating a
  * function does not invalidate an outstanding builder) and an instruction
@@ -36,13 +36,11 @@ class EXPCL_PANDA_SHADERPIPELINE SpirVBuilder {
 public:
   using Instruction = SpirVModule::Instruction;
   using Function = SpirVModule::Function;
-  using Definition = SpirVResultDatabase::Definition;
 
   explicit SpirVBuilder(SpirVModule &module);
   SpirVBuilder(SpirVModule &module, uint32_t function_id, size_t index);
 
   INLINE SpirVModule &get_module();
-  INLINE const SpirVResultDatabase &get_db() const;
 
   // Cursor control.
   void set_insertion_point(uint32_t function_id, size_t index);
@@ -53,9 +51,9 @@ public:
   INLINE uint32_t allocate_id();
   INLINE void push_id(uint32_t id);
 
-  // Inserts an arbitrary instruction at the cursor, without recording
-  // anything in the id table; use this for instructions that have no op_xyz
-  // helper, and record the result via the database if it has one.
+  // Inserts an arbitrary instruction at the cursor, recording its result (if
+  // any) in the module's id index; use this for instructions that have no
+  // op_xyz helper.
   void insert(Instruction op);
   INLINE void insert(spv::Op opcode, std::initializer_list<uint32_t> args);
   void insert(spv::Op opcode, const uint32_t *args, size_t nargs);
@@ -105,7 +103,6 @@ public:
 
 private:
   SpirVModule &_module;
-  SpirVResultDatabase &_db;
 
   // Cursor: index of the function in the module (or npos when not inside a
   // function) and instruction index within it.

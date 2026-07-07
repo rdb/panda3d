@@ -50,21 +50,31 @@ TEST_CASE("SpirVFlattenStructPass turns struct members into variables", "[shader
 
   SpirVTransformer transformer(stream);
   transformer.run(SpirVFlattenStructPass(id_struct));
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
   CHECK(count_op(result, spv::OpTypeStruct) == 0);
   CHECK(!has_variable(result, id_var));
 
-  // The members have become individual variables, named after the struct.
-  const SpirVResultDatabase &db = transformer.get_db();
-  uint32_t var_a = db.find_definition("s.a");
-  uint32_t var_b = db.find_definition("s.b");
+  // The members have become individual variables, whose reflection names are
+  // qualified with the struct variable name.
+  const SpirVModule &out_module = transformer.get_module();
+  uint32_t var_a = 0, var_b = 0;
+  for (uint32_t id = 0; id < transformer.get_id_bound(); ++id) {
+    if (out_module.get_reflection_name(id) == "s.a") {
+      var_a = id;
+    }
+    else if (out_module.get_reflection_name(id) == "s.b") {
+      var_b = id;
+    }
+  }
   REQUIRE(var_a != 0);
   REQUIRE(var_b != 0);
-  CHECK(db.get_definition(var_a)._type == ShaderType::FLOAT);
-  CHECK(db.get_definition(var_b)._type == vec2_type);
+  CHECK(out_module.resolve_value_type(var_a) == ShaderType::FLOAT);
+  CHECK(out_module.resolve_value_type(var_b) == vec2_type);
+  CHECK(out_module.get_name(var_a) == "a");
+  CHECK(out_module.get_name(var_b) == "b");
 
   // The access chain is gone; the load reads the new variable directly.
   CHECK(count_op(result, spv::OpAccessChain) == 0);

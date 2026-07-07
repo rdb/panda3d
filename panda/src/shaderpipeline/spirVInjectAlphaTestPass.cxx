@@ -50,14 +50,12 @@ run(SpirVModule &module) {
     return;
   }
 
-  const SpirVResultDatabase &db = module.get_db();
-
   // For each fragment entry point, find the output variable with location 0.
   pmap<uint32_t, uint32_t> entry_points;
   for (const EntryPoint &ep : module.get_entry_points()) {
     if (ep.model == spv::ExecutionModelFragment) {
       for (uint32_t var_id : ep.interface_vars) {
-        if (db.get_definition(var_id)._location == 0) {
+        if (module.get_location(var_id) == 0) {
           entry_points[ep.function_id] = var_id;
           break;
         }

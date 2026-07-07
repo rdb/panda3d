@@ -85,9 +85,10 @@ public:
     const SpirVModule::Instruction *decl = module.get_global(_before);
     REQUIRE(decl != nullptr);
     REQUIRE(decl->opcode == spv::OpTypeImage);
+    uint32_t sampled = (*decl)[6];
+    spv::ImageFormat format = (spv::ImageFormat)(*decl)[7];
     _new_id = module.define_image_type(
-      module.get_db().get_definition(_before)._type, 0, (*decl)[6],
-      (spv::ImageFormat)(*decl)[7]);
+      module.resolve_type(_before), 0, sampled, format);
     module.replace_type_id(_before, _new_id);
   }
 
@@ -137,8 +138,7 @@ private:
 /**
  * Builds a function with the given parameter types that returns its last
  * parameter (which must be of the return type), for testing parameter
- * removal.  The database is not updated; the caller round-trips the module
- * through emit() and a fresh parse.
+ * removal.
  */
 struct TestFunction {
   uint32_t type_id;
@@ -199,7 +199,7 @@ TEST_CASE("SpirVModule prunes deleted variables from entry point interfaces", "[
   SpirVTransformer transformer(stream);
   DeleteVariablesPass pass({id_in1, id_in2});
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -251,7 +251,7 @@ TEST_CASE("SpirVModule strips call arguments when removing function parameters",
   SpirVTransformer transformer(stream);
   RemoveParametersPass pass({{fn_f.type_id, 0}});
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -278,16 +278,16 @@ TEST_CASE("SpirVModule strips call arguments when removing function parameters",
   CHECK(found_call1);
   CHECK(found_call2);
 
-  // The parameter list recorded for f reflects the removal; g is untouched.
-  const SpirVResultDatabase::Definition &f_def =
-    transformer.get_db().get_definition(fn_f.func_id);
-  REQUIRE(f_def._parameters.size() == 1);
-  CHECK(f_def._parameters[0] == fn_f.param_ids[1]);
+  // The parameter list of f reflects the removal; g is untouched.
+  pvector<uint32_t> f_params =
+    transformer.get_module().get_function_parameters(fn_f.func_id);
+  REQUIRE(f_params.size() == 1);
+  CHECK(f_params[0] == fn_f.param_ids[1]);
 
-  const SpirVResultDatabase::Definition &g_def =
-    transformer.get_db().get_definition(fn_g.func_id);
-  REQUIRE(g_def._parameters.size() == 1);
-  CHECK(g_def._parameters[0] == fn_g.param_ids[0]);
+  pvector<uint32_t> g_params =
+    transformer.get_module().get_function_parameters(fn_g.func_id);
+  REQUIRE(g_params.size() == 1);
+  CHECK(g_params[0] == fn_g.param_ids[0]);
 }
 
 TEST_CASE("SpirVModule merges duplicates cascading from a type replacement", "[shaderpipeline]") {
@@ -316,8 +316,7 @@ TEST_CASE("SpirVModule merges duplicates cascading from a type replacement", "[s
 
   // Find the shadow image type declaration (the image operand of the shadow
   // sampled image type).
-  uint32_t shadow_image_tid = module.get_db().get_definition(
-    module.modify_db().find_type(shadow_type))._type_id;
+  uint32_t shadow_image_tid = module.get_type_id(module.find_type(shadow_type));
 
   InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
@@ -328,7 +327,7 @@ TEST_CASE("SpirVModule merges duplicates cascading from a type replacement", "[s
   SpirVTransformer transformer(stream);
   RetypeImagePass pass(shadow_image_tid);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -353,14 +352,14 @@ TEST_CASE("SpirVModule renumbers member decorations when deleting a member", "[s
   const ShaderType *block_type = ShaderType::register_type(std::move(block));
 
   uint32_t id_block = module.define_variable(block_type, spv::StorageClassUniform);
-  uint32_t block_tid = module.modify_db().find_type(block_type);
+  uint32_t block_tid = module.find_type(block_type);
   REQUIRE(block_tid != 0);
   module.decorate(block_tid, spv::DecorationBlock);
   module.decorate(id_block, spv::DecorationBinding, 0u);
   module.decorate(id_block, spv::DecorationDescriptorSet, 0u);
   add_main(module, spv::ExecutionModelFragment);
 
-  uint32_t offset_c = module.get_db().get_definition(block_tid)._members[2]._offset;
+  int offset_c = module.get_member_offset(block_tid, 2);
 
   InstructionStream stream = module.emit();
   REQUIRE(stream.validate());
@@ -368,7 +367,7 @@ TEST_CASE("SpirVModule renumbers member decorations when deleting a member", "[s
   SpirVTransformer transformer(stream);
   DeleteMemberPass pass(block_tid, 1);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -378,11 +377,10 @@ TEST_CASE("SpirVModule renumbers member decorations when deleting a member", "[s
   CHECK(op.nargs == 3);  // result id + two members
 
   // The member names shifted down along with the members.
-  const SpirVResultDatabase::Definition &def =
-    transformer.get_db().get_definition(block_tid);
-  REQUIRE(def._members.size() == 2);
-  CHECK(def._members[0]._name == "a");
-  CHECK(def._members[1]._name == "c");
+  const SpirVModule &out_module = transformer.get_module();
+  REQUIRE(out_module.get_num_members(block_tid) == 2);
+  CHECK(out_module.get_member_name(block_tid, 0) == "a");
+  CHECK(out_module.get_member_name(block_tid, 1) == "c");
 
   // Member decorations were renumbered, keeping c's original offset.
   int num_member_decorations = 0;
@@ -419,7 +417,7 @@ TEST_CASE("SpirVModule reuses live constants but not deleted ones", "[shaderpipe
     SpirVTransformer transformer(stream);
     DefineConstantPass pass(7);
     transformer.run(pass);
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
     CHECK(pass._const_id == id_c7);
 
     InstructionStream result = transformer.get_result();
@@ -440,7 +438,7 @@ TEST_CASE("SpirVModule reuses live constants but not deleted ones", "[shaderpipe
     SpirVTransformer transformer(stream2);
     DefineConstantPass pass(7, id_unused);
     transformer.run(pass);
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
     CHECK(pass._const_id != id_unused);
     CHECK(pass._const_id != 0);
 
@@ -482,9 +480,8 @@ TEST_CASE("SpirVModule round-trips a module through parse and emit", "[shaderpip
   CHECK(count_op(stream2, spv::OpLoad) == 1);
   CHECK(count_op(stream2, spv::OpStore) == 1);
 
-  const SpirVResultDatabase::Definition &def = reparsed.get_db().get_definition(id_in);
-  CHECK(def._name == "color_in");
-  CHECK(def._location == 3);
-  CHECK(def._type == vec4_type);
-  CHECK(def._storage_class == spv::StorageClassInput);
+  CHECK(reparsed.get_name(id_in) == "color_in");
+  CHECK(reparsed.get_location(id_in) == 3);
+  CHECK(reparsed.resolve_value_type(id_in) == vec4_type);
+  CHECK(reparsed.get_storage_class(id_in) == spv::StorageClassInput);
 }

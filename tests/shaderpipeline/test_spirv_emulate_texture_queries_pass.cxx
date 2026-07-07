@@ -56,7 +56,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass replaces textureSize", "[shaderpipelin
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_texture_query_size);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -71,11 +71,10 @@ TEST_CASE("SpirVEmulateTextureQueriesPass replaces textureSize", "[shaderpipelin
   CHECK(item.first._var_id == id_tex);
   CHECK(item.first.size() == 0);
 
-  const SpirVResultDatabase::Definition &size_def =
-    transformer.get_db().get_definition(item.second);
-  CHECK(size_def._type ==
+  CHECK(transformer.get_module().resolve_value_type(item.second) ==
         ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4)));
-  CHECK(size_def._storage_class == spv::StorageClassUniformConstant);
+  CHECK(transformer.get_module().get_storage_class(item.second) ==
+        spv::StorageClassUniformConstant);
 }
 
 TEST_CASE("SpirVEmulateTextureQueriesPass emulates samplerCubeShadow", "[shaderpipeline]") {
@@ -105,7 +104,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass emulates samplerCubeShadow", "[shaderp
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -126,7 +125,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass emulates samplerCubeShadow", "[shaderp
   // The sampler variable is still there, and the database now considers it a
   // non-shadow sampler type.
   CHECK(has_variable(result, id_tex));
-  CHECK(transformer.get_db().get_definition(id_tex)._type ==
+  CHECK(transformer.get_module().resolve_value_type(id_tex) ==
         cube_sampler_type(false));
 }
 
@@ -168,7 +167,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube types (shadow last)", "[s
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -206,8 +205,8 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube types (shadow last)", "[s
 
   // Both variables now resolve to the same non-shadow sampler type.
   const ShaderType *expected_type = cube_sampler_type(false);
-  CHECK(transformer.get_db().get_definition(id_tex0)._type == expected_type);
-  CHECK(transformer.get_db().get_definition(id_tex1)._type == expected_type);
+  CHECK(transformer.get_module().resolve_value_type(id_tex0) == expected_type);
+  CHECK(transformer.get_module().resolve_value_type(id_tex1) == expected_type);
 }
 
 TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube types (shadow first)", "[shaderpipeline]") {
@@ -243,7 +242,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube types (shadow first)", "[
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -298,10 +297,8 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes function signatures", "[shader
   // the two float(sampler) types by hand.
   uint32_t id_fnf_a = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeFunction, {id_fnf_a, id_float, id_ptr0}));
-  module.modify_db().record_function_type(id_fnf_a, id_float, &id_ptr0, 1);
   uint32_t id_fnf_b = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeFunction, {id_fnf_b, id_float, id_ptr1}));
-  module.modify_db().record_function_type(id_fnf_b, id_float, &id_ptr1, 1);
 
   // float f(samplerCubeShadow p) { return texture(p, ...); }
   uint32_t id_func = module.allocate_id();
@@ -325,9 +322,10 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes function signatures", "[shader
     fn.instructions.push_back(SpirVModule::Instruction(
       spv::OpReturnValue, {id_fresult}));
     fn.instructions.push_back(SpirVModule::Instruction(spv::OpFunctionEnd));
+    for (const SpirVModule::Instruction &op : fn.instructions) {
+      module.record_result(op, id_func);
+    }
     module.modify_functions().push_back(std::move(fn));
-    module.modify_db().record_function(id_func, id_fnf_b);
-    module.modify_db().record_function_parameter(id_param, id_ptr1, id_func);
   }
 
   // main() calls f(tex1).
@@ -343,7 +341,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes function signatures", "[shader
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -400,7 +398,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass leaves unaffected modules untouched", 
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -426,13 +424,10 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes unknown-depth cube types", "[s
   uint32_t id_sampled_image1 = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpTypeSampledImage,
                                              {id_sampled_image1, id_image1}));
-  module.modify_db().record_type(id_sampled_image1, cube_sampler_type(true), false);
-  module.modify_db().modify_definition(id_sampled_image1)._type_id = id_image1;
   uint32_t id_ptr1 = module.define_pointer_type(id_sampled_image1, spv::StorageClassUniformConstant);
   uint32_t id_tex1 = module.allocate_id();
   module.add_global(SpirVModule::Instruction(spv::OpVariable,
     {id_ptr1, id_tex1, (uint32_t)spv::StorageClassUniformConstant}));
-  module.modify_db().record_variable(id_tex1, id_ptr1, spv::StorageClassUniformConstant);
   module.set_name(id_tex1, "tex1");
 
   uint32_t id_float = module.define_type(ShaderType::FLOAT);
@@ -455,7 +450,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes unknown-depth cube types", "[s
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -515,7 +510,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass dedupes cube sampler arrays", "[shader
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -588,7 +583,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass removes decorations of replaced types"
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -634,9 +629,9 @@ TEST_CASE("SpirVEmulateTextureQueriesPass composes with variable removal", "[sha
   SpirVTransformer transformer(stream);
   SpirVEmulateTextureQueriesPass pass(Shader::C_sampler_cube_shadow);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
   transformer.run(SpirVRemoveUnusedVariablesPass());
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -692,7 +687,7 @@ TEST_CASE("SpirVEmulateTextureQueriesPass combines shadow and query emulation", 
   SpirVEmulateTextureQueriesPass pass(
     Shader::C_sampler_cube_shadow | Shader::C_texture_query_levels);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -713,9 +708,8 @@ TEST_CASE("SpirVEmulateTextureQueriesPass combines shadow and query emulation", 
   CHECK(item.first._var_id == id_tex);
   CHECK(item.first.size() == 0);
 
-  const SpirVResultDatabase::Definition &size_def =
-    transformer.get_db().get_definition(item.second);
-  CHECK(size_def._type ==
+  CHECK(transformer.get_module().resolve_value_type(item.second) ==
         ShaderType::register_type(ShaderType::Vector(ShaderType::ST_float, 4)));
-  CHECK(size_def._storage_class == spv::StorageClassUniformConstant);
+  CHECK(transformer.get_module().get_storage_class(item.second) ==
+        spv::StorageClassUniformConstant);
 }

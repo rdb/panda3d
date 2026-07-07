@@ -46,7 +46,7 @@ TEST_CASE("SpirVMakeBlockPass gathers variables into a block", "[shaderpipeline]
   SpirVTransformer transformer(stream);
   SpirVMakeBlockPass pass(block_type, {id_var_a, id_var_b}, spv::StorageClassUniform, 1, 2);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -57,10 +57,9 @@ TEST_CASE("SpirVMakeBlockPass gathers variables into a block", "[shaderpipeline]
   REQUIRE(pass._block_var_id != 0);
   CHECK(has_variable(result, pass._block_var_id));
 
-  const SpirVResultDatabase::Definition &def =
-    transformer.get_db().get_definition(pass._block_var_id);
-  CHECK(def._type == block_type);
-  CHECK(def._storage_class == spv::StorageClassUniform);
+  const SpirVModule &out_module = transformer.get_module();
+  CHECK(out_module.resolve_value_type(pass._block_var_id) == block_type);
+  CHECK(out_module.get_storage_class(pass._block_var_id) == spv::StorageClassUniform);
 
   // Each load now goes through an access chain into the block.
   CHECK(count_op(result, spv::OpAccessChain) == 2);

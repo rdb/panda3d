@@ -38,8 +38,6 @@ SpirVMakeBlockPass(const ShaderType::Struct *block_type, const pvector<uint32_t>
  */
 void SpirVMakeBlockPass::
 run(SpirVModule &module) {
-  SpirVResultDatabase &db = module.modify_db();
-
   // Define the block type and variable.
   uint32_t block_type_id = module.define_type(_block_type);
   _block_var_id = module.define_variable(_block_type, _storage_class);
@@ -52,7 +50,7 @@ run(SpirVModule &module) {
   }
 
   for (const auto &item : _member_indices) {
-    const std::string &name = db.get_definition(item.first)._name;
+    const std::string &name = module.get_name(item.first);
     if (!name.empty()) {
       module.set_member_name(block_type_id, item.second, name);
     }
@@ -76,7 +74,6 @@ run(SpirVModule &module) {
         if (it != _member_indices.end()) {
           uint32_t constant_id = module.define_int_constant(it->second);
           uint32_t chain_id = builder.op_access_chain(_block_var_id, {constant_id});
-          module.mark_used(chain_id);
           function.instructions[builder.get_insertion_index()].args[arg_index] = chain_id;
         }
       };
@@ -97,7 +94,8 @@ run(SpirVModule &module) {
             op.args[2] = _block_var_id;
             op.args.insert(op.args.begin() + 3, constant_id);
 
-            db.set_origin(op.args[1], _block_var_id);
+            // The result type changed; make the id index follow.
+            module.record_result(op, function.id);
           }
         }
         break;

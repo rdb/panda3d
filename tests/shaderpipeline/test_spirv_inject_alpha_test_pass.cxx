@@ -37,7 +37,7 @@ TEST_CASE("SpirVInjectAlphaTestPass injects a comparison", "[shaderpipeline]") {
     SpirVTransformer transformer(stream);
     SpirVInjectAlphaTestPass pass(SpirVInjectAlphaTestPass::M_greater, 4);
     transformer.run(pass);
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
 
     InstructionStream result = transformer.get_result();
     CHECK(result.validate());
@@ -49,11 +49,10 @@ TEST_CASE("SpirVInjectAlphaTestPass injects a comparison", "[shaderpipeline]") {
 
     // A uniform was added to hold the reference alpha value.
     REQUIRE(pass._alpha_ref_var_id != 0);
-    const SpirVResultDatabase::Definition &ref_def =
-      transformer.get_db().get_definition(pass._alpha_ref_var_id);
-    CHECK(ref_def._type == ShaderType::FLOAT);
-    CHECK(ref_def._storage_class == spv::StorageClassUniformConstant);
-    CHECK(ref_def._location == 4);
+    const SpirVModule &out_module = transformer.get_module();
+    CHECK(out_module.resolve_value_type(pass._alpha_ref_var_id) == ShaderType::FLOAT);
+    CHECK(out_module.get_storage_class(pass._alpha_ref_var_id) == spv::StorageClassUniformConstant);
+    CHECK(out_module.get_location(pass._alpha_ref_var_id) == 4);
 
     // The comparison is locatable by its recorded result id.
     REQUIRE(pass._compare_op_ids.size() == 1);
@@ -65,7 +64,7 @@ TEST_CASE("SpirVInjectAlphaTestPass injects a comparison", "[shaderpipeline]") {
   SECTION("never mode replaces the return with a kill") {
     SpirVTransformer transformer(stream);
     transformer.run(SpirVInjectAlphaTestPass(SpirVInjectAlphaTestPass::M_never));
-    CHECK(transformer.validate_db());
+    CHECK(transformer.validate());
 
     InstructionStream result = transformer.get_result();
     CHECK(result.validate());
@@ -104,7 +103,7 @@ TEST_CASE("SpirVInjectAlphaTestPass tests before every return", "[shaderpipeline
   SpirVTransformer transformer(stream);
   SpirVInjectAlphaTestPass pass(SpirVInjectAlphaTestPass::M_less, 4);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());

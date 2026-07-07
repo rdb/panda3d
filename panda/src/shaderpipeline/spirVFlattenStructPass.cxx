@@ -25,12 +25,10 @@ SpirVFlattenStructPass(uint32_t type_id) : _type_id(type_id) {
  */
 void SpirVFlattenStructPass::
 run(SpirVModule &module) {
-  SpirVResultDatabase &db = module.modify_db();
-
   {
-    const Definition &def = db.get_definition(_type_id);
-    DCAST_INTO_V(_struct_type, def._type);
-    _member_ids.resize(def._members.size(), 0);
+    const ShaderType *type = module.resolve_type(_type_id);
+    DCAST_INTO_V(_struct_type, type);
+    _member_ids.resize(_struct_type->get_num_members(), 0);
   }
 
   // Find the variables of this struct type, along with the pointer types
@@ -43,21 +41,20 @@ run(SpirVModule &module) {
       pointer_type_ids.push_back(op.args[0]);
     }
     else if (op.opcode == spv::OpVariable && op.args.size() >= 3 &&
-             db.get_definition(op.args[0])._type_id == _type_id) {
+             module.unwrap_pointer_type(op.args[0]) == _type_id) {
       struct_var_ids.push_back(op.args[1]);
     }
   }
 
   // Replace each variable with individual variables for all its members.
   for (uint32_t struct_var_id : struct_var_ids) {
-    Definition &struct_def = db.modify_definition(struct_var_id);
-    int struct_location = struct_def._location;
-    std::string struct_var_name = struct_def._name;
+    int struct_location = module.get_location(struct_var_id);
+    std::string struct_var_name = module.get_name(struct_var_id);
 
     if (shader_cat.is_spam()) {
       shader_cat.spam()
         << "Removing variable " << struct_var_id << ": "
-        << *struct_def._type << " " << struct_var_name << "\n";
+        << *_struct_type << " " << struct_var_name << "\n";
     }
     module.delete_id(struct_var_id);
     _deleted.insert(struct_var_id);
@@ -71,10 +68,10 @@ run(SpirVModule &module) {
         module.set_name(variable_id, member.name);
       }
 
-      // The database keeps the qualified name, for consumers of the module's
-      // parameter definitions.
+      // Parameter extraction reports the qualified name for the new
+      // variable; only the plain member name is emitted as OpName.
       if (!struct_var_name.empty()) {
-        db.modify_definition(variable_id)._name = struct_var_name + "." + member.name;
+        module.set_reflection_name(variable_id, struct_var_name + "." + member.name);
       }
       if (struct_location >= 0) {
         // Assign decorations to the individual members.
@@ -109,10 +106,7 @@ run(SpirVModule &module) {
 
           op.args[0] = pointer_type_id;
           op.args[2] = new_var_id;
-
-          Definition &def = db.modify_definition(op.args[1]);
-          def._type_id = pointer_type_id;
-          def._origin_id = new_var_id;
+          module.record_result(op, function.id);
         }
         else if (_deleted.count(op.args[2])) {
           uint32_t index = module.resolve_constant(op.args[3]);
@@ -126,12 +120,7 @@ run(SpirVModule &module) {
             op.args[0] = pointer_type_id;
             op.args[2] = _member_ids[index];
             op.args.erase(op.args.begin() + 3);
-
-            // Change the origin so that future loads through this access
-            // chain will be able to mark the new variable as used.
-            Definition &def = db.modify_definition(op.args[1]);
-            def._type_id = pointer_type_id;
-            def._origin_id = _member_ids[index];
+            module.record_result(op, function.id);
           } else {
             // Delete the access chain entirely.
             uint32_t result_id = op.args[1];
@@ -148,7 +137,6 @@ run(SpirVModule &module) {
           if (it != _deleted_access_chains.end()) {
             op.args[ai] = it->second;
           }
-          db.mark_used(op.args[ai]);
         }
         break;
 
@@ -176,20 +164,12 @@ run(SpirVModule &module) {
         // If this triggers, the struct is being loaded into another variable,
         // which means we can't unwrap this (for now).
         {
-          Definition &def = db.modify_definition(op.args[1]);
           auto it = _deleted_access_chains.find(op.args[2]);
           if (it != _deleted_access_chains.end()) {
             op.args[2] = it->second;
-            def._origin_id = op.args[2];
-          }
-          else if (_deleted.count(def._origin_id)) {
-            // Origin points to deleted variable, change to proper variable.
-            const Definition &from = db.get_definition(op.args[2]);
-            def._origin_id = from._origin_id;
           }
         }
         nassertd(!_deleted.count(op.args[2])) continue;
-        db.mark_used(op.args[1]);
         break;
 
       case spv::OpStore:
@@ -203,7 +183,6 @@ run(SpirVModule &module) {
           }
         }
         nassertd(!_deleted.count(op.args[0])) continue;
-        db.mark_used(op.args[0]);
         break;
 
       case spv::OpCopyMemory:
@@ -215,7 +194,6 @@ run(SpirVModule &module) {
             op.args[ai] = it->second;
           }
           nassertd(!_deleted.count(op.args[ai])) continue;
-          db.mark_used(op.args[ai]);
         }
         break;
 
@@ -228,7 +206,6 @@ run(SpirVModule &module) {
           }
         }
         nassertd(!_deleted.count(op.args[2])) continue;
-        db.mark_used(op.args[2]);
         break;
 
       case spv::OpCopyObject:
@@ -238,12 +215,9 @@ run(SpirVModule &module) {
           if (it != _deleted_access_chains.end()) {
             op.args[2] = it->second;
 
-            Definition &def = db.modify_definition(op.args[1]);
-            def._origin_id = op.args[2];
-            def._type_id = module.get_type_id(op.args[2]);
-
             // Copy the type since the storage class may have changed.
-            op.args[0] = def._type_id;
+            op.args[0] = module.get_type_id(op.args[2]);
+            module.record_result(op, function.id);
           }
           else if (_deleted.count(op.args[2])) {
             // If it's just a copy of the struct pointer, delete the copy.
@@ -259,36 +233,15 @@ run(SpirVModule &module) {
           auto it = _deleted_access_chains.find(op.args[2]);
           if (it != _deleted_access_chains.end()) {
             op.args[2] = it->second;
-            db.modify_definition(op.args[1])._origin_id = op.args[2];
           }
         }
         nassertd(!_deleted.count(op.args[2])) continue;
-
-        if (!db.get_definition(op.args[0]).is_pointer_type()) {
-          db.mark_used(op.args[1]);
-        }
-        break;
-
-      case spv::OpSelect:
-        db.mark_used(op.args[3]);
-        db.mark_used(op.args[4]);
-        break;
-
-      case spv::OpReturnValue:
-        db.mark_used(op.args[0]);
         break;
 
       case spv::OpCopyLogical:
         // Can't copy pointers using this instruction.
         nassertd(!_deleted.count(op.args[2])) continue;
         nassertd(!_deleted_access_chains.count(op.args[2])) continue;
-        break;
-
-      case spv::OpPtrEqual:
-      case spv::OpPtrNotEqual:
-      case spv::OpPtrDiff:
-        db.mark_used(op.args[2]);
-        db.mark_used(op.args[3]);
         break;
 
       default:

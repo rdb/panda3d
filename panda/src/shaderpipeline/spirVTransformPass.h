@@ -23,17 +23,18 @@
  * and function instruction vectors, using SpirVBuilder to insert code, and
  * the module's mutation methods to delete and redirect ids); all mutations
  * apply immediately.  After the pass has finished, the transformer merges
- * any duplicate unique-type declarations the pass may have created and
- * reconciles the database's derived state with the module (see
- * SpirVModule::deduplicate_types and reparse_db).
+ * any duplicate unique-type declarations the pass may have created (see
+ * SpirVModule::deduplicate_types).
+ *
+ * A pass that needs to know how variables are used (rather than declared)
+ * constructs a SpirVUsageAnalysis at the point where it needs the answers.
  */
 class EXPCL_PANDA_SHADERPIPELINE SpirVTransformPass {
 public:
-  using Definition = SpirVResultDatabase::Definition;
-  using MemberDefinition = SpirVResultDatabase::MemberDefinition;
   using Instruction = SpirVModule::Instruction;
   using Function = SpirVModule::Function;
   using EntryPoint = SpirVModule::EntryPoint;
+  using IdKind = SpirVModule::IdKind;
 
   virtual ~SpirVTransformPass() = default;
 

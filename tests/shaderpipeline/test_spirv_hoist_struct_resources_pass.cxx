@@ -53,7 +53,7 @@ TEST_CASE("SpirVHoistStructResourcesPass moves resources out of structs", "[shad
   SpirVTransformer transformer(stream);
   SpirVHoistStructResourcesPass pass(true);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -82,9 +82,9 @@ TEST_CASE("SpirVHoistStructResourcesPass moves resources out of structs", "[shad
   CHECK(find_load_pointer(result, id_sampled_image) == id_chain_tex);
 
   // The struct itself remains, with only the float member.
-  const SpirVResultDatabase::Definition &struct_def =
-    transformer.get_db().get_definition(id_struct);
-  const ShaderType::Struct *result_struct_type = struct_def._type->as_struct();
+  const ShaderType *result_type = transformer.get_module().resolve_type(id_struct);
+  REQUIRE(result_type != nullptr);
+  const ShaderType::Struct *result_struct_type = result_type->as_struct();
   REQUIRE(result_struct_type != nullptr);
   REQUIRE(result_struct_type->get_num_members() == 1);
   CHECK(result_struct_type->get_member(0).type == ShaderType::FLOAT);
@@ -128,7 +128,7 @@ TEST_CASE("SpirVHoistStructResourcesPass empties structs with only resources", "
   SpirVTransformer transformer(stream);
   SpirVHoistStructResourcesPass pass(false);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -165,7 +165,7 @@ TEST_CASE("SpirVHoistStructResourcesPass empties structs with only resources", "
   CHECK(find_op(result, spv::OpTypePointer).args[0] == id_ptr_uc_image);
 
   // The hoisted variable took over the name of the old variable.
-  CHECK(transformer.get_db().get_definition(hoisted_var)._name == "s_m0");
+  CHECK(transformer.get_module().get_name(hoisted_var) == "s_m0");
 }
 
 TEST_CASE("SpirVHoistStructResourcesPass removes structs with only resources", "[shaderpipeline]") {
@@ -203,7 +203,7 @@ TEST_CASE("SpirVHoistStructResourcesPass removes structs with only resources", "
   SpirVTransformer transformer(stream);
   SpirVHoistStructResourcesPass pass(true);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -267,7 +267,7 @@ TEST_CASE("SpirVHoistStructResourcesPass keeps emptied structs as members", "[sh
   SpirVTransformer transformer(stream);
   SpirVHoistStructResourcesPass pass(false);
   transformer.run(pass);
-  CHECK(transformer.validate_db());
+  CHECK(transformer.validate());
 
   InstructionStream result = transformer.get_result();
   CHECK(result.validate());
@@ -312,9 +312,9 @@ TEST_CASE("SpirVHoistStructResourcesPass keeps emptied structs as members", "[sh
   }
   CHECK(found_chain_f);
 
-  // The database reflects the emptied inner struct.
+  // The resolved type reflects the emptied inner struct.
   const ShaderType::Struct *outer_type =
-    transformer.get_db().get_definition(id_outer)._type->as_struct();
+    transformer.get_module().resolve_type(id_outer)->as_struct();
   REQUIRE(outer_type != nullptr);
   REQUIRE(outer_type->get_num_members() == 2);
   const ShaderType::Struct *inner_type = outer_type->get_member(0).type->as_struct();

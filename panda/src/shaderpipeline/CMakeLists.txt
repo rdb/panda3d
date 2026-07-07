@@ -14,9 +14,9 @@ set(P3SHADERPIPELINE_HEADERS
   spirVModule.h spirVModule.I
   spirVRemoveUnusedVariablesPass.h
   spirVReplaceVariableTypePass.h
-  spirVResultDatabase.h spirVResultDatabase.I
   spirVTransformer.h spirVTransformer.I
   spirVTransformPass.h spirVTransformPass.I
+  spirVUsageAnalysis.h spirVUsageAnalysis.I
 )
 
 set(P3SHADERPIPELINE_SOURCES
@@ -36,8 +36,8 @@ set(P3SHADERPIPELINE_SOURCES
   spirVModule.cxx
   spirVRemoveUnusedVariablesPass.cxx
   spirVReplaceVariableTypePass.cxx
-  spirVResultDatabase.cxx
   spirVTransformer.cxx
+  spirVUsageAnalysis.cxx
 )
 
 add_custom_command(
